@@ -125,8 +125,8 @@
 ;; For base IDs, last two bytes are always representing site ID
 ;; Stored strings are BASE-ID:OFFSETs. So the last two bytes represent offset,
 ;; and second last two bytes represent site ID
-;; (defconst crdt--max-value (lsh 1 16))
-(defconst crdt--max-value 16)
+(defconst crdt--max-value (lsh 1 16))
+;; (defconst crdt--max-value 16)
 ;; for debug
 (defconst crdt--low-byte-mask 255)
 (defsubst crdt--get-two-bytes (string index)
@@ -429,8 +429,7 @@ Returns a list of (insert type) messages to be sent."
        (let* ((not-end (< outer-end (point-max)))
               (ending-id (when not-end (crdt--get-starting-id outer-end))))
          (when (and not-end (eq starting-id (crdt--get-starting-id outer-end)))
-           (crdt--set-id outer-end (crdt--id-replace-offset starting-id (+ 1 left-offset (length crdt--changed-string))))))
-       ))
+           (crdt--set-id outer-end (crdt--id-replace-offset starting-id (+ 1 left-offset (length crdt--changed-string))))))))
     (crdt--with-insertion-information
      ((length crdt--changed-string) outer-end crdt--changed-string nil 0 nil)
      (crdt--split-maybe)))
