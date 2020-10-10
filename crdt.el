@@ -709,24 +709,30 @@ to server unless WITHOUT is NIL."
           (while (setq message (ignore-errors (read (current-buffer))))
             ;; (print message)
             (with-current-buffer (process-get process 'crdt-buffer)
-              (save-excursion
-                (widen)
-                (if (or (not (crdt--server-p)) (process-get process 'authenticated))
-                    (let ((crdt--inhibit-update t))
-                      (crdt-process-message message process))
-                  (cl-block nil
-                    (when (eq (car message) 'hello)
-                      (cl-destructuring-bind (name &optional response) (cdr message)
-                        (when (or (not (process-get process 'password)) ; server password is empty
-                                  (and response (string-equal response (process-get process 'challenge))))
-                          (process-put process 'authenticated t)
-                          (process-put process 'client-name name)
-                          (crdt--greet-client process)
-                          (cl-return))))
-                    (let ((challenge (crdt--generate-challenge)))
-                      (process-put process 'challenge
-                                   (gnutls-hash-mac 'SHA1 (substring (process-get process 'password)) challenge))
-                      (process-send-string process (format "%S" `(challenge ,challenge))))))))
+              (condition-case err
+                  (save-excursion
+                    (widen)
+                    (if (or (not (crdt--server-p)) (process-get process 'authenticated))
+                        (let ((crdt--inhibit-update t))
+                          (crdt-process-message message process))
+                      (cl-block nil
+                        (when (eq (car message) 'hello)
+                          (cl-destructuring-bind (name &optional response) (cdr message)
+                            (when (or (not (process-get process 'password)) ; server password is empty
+                                      (and response (string-equal response (process-get process 'challenge))))
+                              (process-put process 'authenticated t)
+                              (process-put process 'client-name name)
+                              (crdt--greet-client process)
+                              (cl-return))))
+                        (let ((challenge (crdt--generate-challenge)))
+                          (process-put process 'challenge
+                                       (gnutls-hash-mac 'SHA1 (substring (process-get process 'password)) challenge))
+                          (process-send-string process (format "%S" `(challenge ,challenge)))))))
+                (error (message "%s error when processing message from %s:%s, disconnecting." err
+                                (process-contact process :host) (process-contact process :service))
+                       (if (crdt--server-p)
+                           (delete-process process)
+                         (crdt-stop-client)))))
             (delete-region (point-min) (point))
             (goto-char (point-min))))))))
 (defun crdt--server-process-sentinel (client message)

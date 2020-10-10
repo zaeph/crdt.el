@@ -1,0 +1,19 @@
+* Introduction
+~crdt.el~ is a real-time collaborative editing environment for Emacs using Conflict-free Replicated Data Types.
+* Usage
+** Installation
+Just `M-x load-file` `crdt.el`, or `M-x eval-buffer` in `crdt.el`,
+or `(require 'crdt)`. Or whatever package management tool you use.
+** Share a buffer
+In that buffer, `M-x crdt-serve-buffer`. Then enter port, optional password
+and your display name.
+** Connect to a shared buffer
+`M-x crdt-connect`
+** List active users.
+In a CRDT shared buffer (either server or client), `M-x crdt-list-users`.
+
+In the displayed user list, press `RET` on an entry to goto that user's cursor position.
+** Stop sharing.
+For server, `M-x crdt-stop-serve-buffer`, or just kill the buffer,
+
+For client, `M-x crdt-stop-client`, or just kill the buffer.
