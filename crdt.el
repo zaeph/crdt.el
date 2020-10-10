@@ -27,7 +27,7 @@
 ;;   Text-based version
 ;;   (it should be easy to migrate to a binary version.  Using text for better debugging for now)
 ;;   Every message takes the form (type . body)
-;;   type can be: insert hello cursor challenge sync
+;;   type can be: insert delete cursor hello challenge sync
 ;;   - insert
 ;;     body takes the form (crdt-id position-hint content)
 ;;     - position-hint is the buffer position where the operation happens at the site
@@ -125,8 +125,8 @@
 ;; For base IDs, last two bytes are always representing site ID
 ;; Stored strings are BASE-ID:OFFSETs. So the last two bytes represent offset,
 ;; and second last two bytes represent site ID
-(defconst crdt--max-value (lsh 1 16))
-;; (defconst crdt--max-value 16)
+;; (defconst crdt--max-value (lsh 1 16))
+(defconst crdt--max-value 16)
 ;; for debug
 (defconst crdt--low-byte-mask 255)
 (defsubst crdt--get-two-bytes (string index)
@@ -354,6 +354,7 @@ Returns a list of (insert type) messages to be sent."
                (push `(insert ,(base64-encode-string virtual-id) ,beg
                               ,(buffer-substring-no-properties beg merge-end))
                      resulting-commands))
+             (cl-incf left-offset (- merge-end beg))
              (setq beg merge-end)))))
      (while (< beg end)
        (let ((block-end (min end (+ crdt--max-value beg))))
@@ -424,15 +425,15 @@ Returns a list of (insert type) messages to be sent."
   (let ((outer-end end))
     (crdt--with-insertion-information
      (beg 0 nil crdt--changed-string nil (length crdt--changed-string))
-     (if (crdt--split-maybe)
-         (let* ((not-end (< outer-end (point-max)))
-                (ending-id (when not-end (crdt--get-starting-id outer-end))))
-           (when (and not-end (eq starting-id (crdt--get-starting-id outer-end)))
-             (crdt--set-id outer-end (crdt--id-replace-offset starting-id (+ 1 left-offset (length crdt--changed-string))))
-             t))
-       (crdt--with-insertion-information
-        ((length crdt--changed-string) outer-end crdt--changed-string nil 0 nil)
-        (crdt--split-maybe)))))
+     (when (crdt--split-maybe)
+       (let* ((not-end (< outer-end (point-max)))
+              (ending-id (when not-end (crdt--get-starting-id outer-end))))
+         (when (and not-end (eq starting-id (crdt--get-starting-id outer-end)))
+           (crdt--set-id outer-end (crdt--id-replace-offset starting-id (+ 1 left-offset (length crdt--changed-string))))))
+       ))
+    (crdt--with-insertion-information
+     ((length crdt--changed-string) outer-end crdt--changed-string nil 0 nil)
+     (crdt--split-maybe)))
   ;; (crdt--verify-buffer)
   `(delete ,beg ,@ (crdt--dump-ids 0 (length crdt--changed-string) crdt--changed-string t)))
 (defun crdt--remote-delete (position-hint id-pairs)
@@ -450,9 +451,10 @@ Returns a list of (insert type) messages to be sent."
              (setq length 0))
             ((-1)
              (let* ((starting-id (crdt--get-starting-id (point)))
+                    (eob (crdt--end-of-block-p (point)))
                     (left-offset (crdt--get-id-offset starting-id (point))))
                (delete-char length)
-               (crdt--set-id (point) (crdt--id-replace-offset starting-id (+ left-offset length))))
+               (crdt--set-id (point) (crdt--id-replace-offset starting-id (+ left-offset length)) eob))
              (setq length 0)))))
       ;; (crdt--verify-buffer)
       )))
@@ -490,26 +492,27 @@ Returns a list of (insert type) messages to be sent."
       (1- (crdt--find-id id hint))
     (point-max)))
 (defun crdt--remote-cursor (site-id point-position-hint point-crdt-id mark-position-hint mark-crdt-id)
-  (let ((ov-pair (gethash site-id crdt--overlay-table)))
-    (if point-crdt-id
-        (let* ((point (crdt--id-to-pos point-crdt-id point-position-hint))
-               (mark (if mark-crdt-id
-                         (crdt--id-to-pos mark-crdt-id mark-position-hint)
-                       point)))
-          (unless ov-pair
-            (let ((new-cursor (make-overlay 1 1))
-                  (new-region (make-overlay 1 1)))
-              (overlay-put new-cursor 'face `(:background ,(crdt--get-cursor-color site-id)))
-              (overlay-put new-cursor 'category 'crdt-pseudo-cursor)
-              (overlay-put new-region 'face `(:background ,(crdt--get-region-color site-id) :extend t))
-              (setq ov-pair (puthash site-id (cons new-cursor new-region)
-                                     crdt--overlay-table))))
-          (crdt--move-cursor (car ov-pair) point)
-          (crdt--move-region (cdr ov-pair) point mark))
-      (when ov-pair
-        (remhash site-id crdt--overlay-table)
-        (delete-overlay (car ov-pair))
-        (delete-overlay (cdr ov-pair))))))
+  (when site-id
+    (let ((ov-pair (gethash site-id crdt--overlay-table)))
+      (if point-crdt-id
+          (let* ((point (crdt--id-to-pos point-crdt-id point-position-hint))
+                 (mark (if mark-crdt-id
+                           (crdt--id-to-pos mark-crdt-id mark-position-hint)
+                         point)))
+            (unless ov-pair
+              (let ((new-cursor (make-overlay 1 1))
+                    (new-region (make-overlay 1 1)))
+                (overlay-put new-cursor 'face `(:background ,(crdt--get-cursor-color site-id)))
+                (overlay-put new-cursor 'category 'crdt-pseudo-cursor)
+                (overlay-put new-region 'face `(:background ,(crdt--get-region-color site-id) :extend t))
+                (setq ov-pair (puthash site-id (cons new-cursor new-region)
+                                       crdt--overlay-table))))
+            (crdt--move-cursor (car ov-pair) point)
+            (crdt--move-region (cdr ov-pair) point mark))
+        (when ov-pair
+          (remhash site-id crdt--overlay-table)
+          (delete-overlay (car ov-pair))
+          (delete-overlay (cdr ov-pair)))))))
 
 (cl-defun crdt--local-cursor (&optional (lazy t))
   (let ((point (point))
@@ -585,7 +588,7 @@ If CRDT--NETWORK-PROCESS is a server process, broadcast MESSAGE-STRING
 to clients except the one of which CLIENT-ID property is EQ to WITHOUT.
 If CRDT--NETWORK-PROCESS is a server process, send MESSAGE-STRING
 to server unless WITHOUT is NIL."
-  ;; (message message-string)
+  ;; (message "Send %s" message-string)
   (if (process-contact crdt--network-process :server)
       (dolist (client crdt--network-clients)
         (when (and (eq (process-status client) 'open)
@@ -705,7 +708,7 @@ to server unless WITHOUT is NIL."
         (goto-char (point-min))
         (let (message)
           (while (setq message (ignore-errors (read (current-buffer))))
-            (print message)
+            ;; (print message)
             (with-current-buffer (process-get process 'crdt-buffer)
               (save-excursion
                 (widen)
