@@ -41,6 +41,7 @@
 ;;          (site-id point-position-hint point-crdt-id mark-position-hint mark-crdt-id)
 ;;     *-crdt-id can be either a CRDT ID, or
 ;;       - nil, which means clear the point/mark
+;;       - "", which means (point-max)
 ;;   - contact
 ;;     body takes the form
 ;;          (site-id name address)
@@ -72,7 +73,7 @@
 (defcustom crdt-ask-for-name t
   "Ask for display name everytime a CRDT session is to be started."
   :type 'boolean)
-(defcustom crdt-default-name ""
+(defcustom crdt-default-name "anonymous"
   "Default display name."
   :type 'string)
 (defcustom crdt-ask-for-password t
@@ -125,7 +126,7 @@
 ;; Stored strings are BASE-ID:OFFSETs. So the last two bytes represent offset,
 ;; and second last two bytes represent site ID
 (defconst crdt--max-value (lsh 1 16))
-;; (defconst crdt--max-value 4)
+;; (defconst crdt--max-value 16)
 ;; for debug
 (defconst crdt--low-byte-mask 255)
 (defsubst crdt--get-two-bytes (string index)
@@ -205,13 +206,15 @@ Return NIL otherwise."
 Assume the stored literal ID is STARTING-ID."
   (let* ((start-pos (previous-single-property-change (1+ pos) 'crdt-id obj (or limit (point-min)))))
     (+ (- pos start-pos) (crdt--id-offset starting-id))))
-(defsubst crdt--get-id (pos &optional obj limit)
+(defsubst crdt--get-id (pos &optional obj left-limit right-limit)
   "Get the real CRDT ID at POS."
-  (let ((limit (or limit (point-min))))
-    (if (< pos limit) ""
-      (let* ((starting-id (crdt--get-starting-id pos obj))
-             (left-offset (crdt--get-id-offset starting-id pos obj limit)))
-        (crdt--id-replace-offset starting-id left-offset)))))
+  (let ((right-limit (or right-limit (point-max)))
+        (left-limit (or left-limit (point-min))))
+    (if (< pos right-limit)
+        (let* ((starting-id (crdt--get-starting-id pos obj))
+               (left-offset (crdt--get-id-offset starting-id pos obj left-limit)))
+          (crdt--id-replace-offset starting-id left-offset))
+      "")))
 
 (defsubst crdt--set-id (pos id &optional end-of-block-p obj limit)
   "Set the crdt ID and END-OF-BLOCK-P at POS in OBJ.
@@ -397,25 +400,23 @@ Returns a list of (insert type) messages to be sent."
                                       (- (crdt--get-two-bytes id (- (string-bytes left-id) 2))
                                          (crdt--id-offset left-id))))
                   right-pos))))))))
-(defun crdt--remote-insert (message)
+(defun crdt--remote-insert (id position-hint content)
   (let ((crdt--inhibit-update t))
-    (cl-destructuring-bind (id-base64 position-hint content) message
-      (let* ((id (base64-decode-string id-base64))
-             (beg (crdt--find-id id position-hint)) end)
-        (goto-char beg)
-        (insert content)
-        (setq end (point))
-        (with-silent-modifications
-          (crdt--with-insertion-information
-           (beg end)
-           (let ((base-length (- (string-bytes starting-id) 2)))
-             (if (and (eq (string-bytes id) (string-bytes starting-id))
-                      (eq t (compare-strings starting-id 0 base-length
-                                             id 0 base-length))
-                      (eq (1+ left-offset) (crdt--id-offset id)))
-                 (put-text-property beg end 'crdt-id starting-id-pair)
-               (put-text-property beg end 'crdt-id (cons id t))))
-           (crdt--split-maybe))))))
+    (let* ((beg (crdt--find-id id position-hint)) end)
+      (goto-char beg)
+      (insert content)
+      (setq end (point))
+      (with-silent-modifications
+        (crdt--with-insertion-information
+         (beg end)
+         (let ((base-length (- (string-bytes starting-id) 2)))
+           (if (and (eq (string-bytes id) (string-bytes starting-id))
+                    (eq t (compare-strings starting-id 0 base-length
+                                           id 0 base-length))
+                    (eq (1+ left-offset) (crdt--id-offset id)))
+               (put-text-property beg end 'crdt-id starting-id-pair)
+             (put-text-property beg end 'crdt-id (cons id t))))
+         (crdt--split-maybe)))))
   ;; (crdt--verify-buffer)
   )
 
@@ -434,29 +435,27 @@ Returns a list of (insert type) messages to be sent."
         (crdt--split-maybe)))))
   ;; (crdt--verify-buffer)
   `(delete ,beg ,@ (crdt--dump-ids 0 (length crdt--changed-string) crdt--changed-string t)))
-(defun crdt--remote-delete (message)
-  (cl-destructuring-bind (position-hint . id-pairs) message
-    (dolist (id-pair id-pairs)
-      (cl-destructuring-bind (length . id-base64) id-pair
-        (let ((id (base64-decode-string id-base64)))
-          (while (> length 0)
-            (goto-char (1- (crdt--find-id id position-hint)))
-            (let* ((end-of-block (next-single-property-change (point) 'crdt-id nil (point-max)))
-                   (block-length (- end-of-block (point))))
-              (cl-case (cl-signum (- length block-length))
-                ((1) (delete-char block-length)
-                 (cl-decf length block-length)
-                 (crdt--set-id-offset id (+ (crdt--id-offset id) block-length)))
-                ((0) (delete-char length)
-                 (setq length 0))
-                ((-1)
-                 (let* ((starting-id (crdt--get-starting-id (point)))
-                        (left-offset (crdt--get-id-offset starting-id (point))))
-                   (delete-char length)
-                   (crdt--set-id (point) (crdt--id-replace-offset starting-id (+ left-offset length))))
-                 (setq length 0))))))
-        ;; (crdt--verify-buffer)
-        ))))
+(defun crdt--remote-delete (position-hint id-pairs)
+  (dolist (id-pair id-pairs)
+    (cl-destructuring-bind (length . id) id-pair
+      (while (> length 0)
+        (goto-char (1- (crdt--find-id id position-hint)))
+        (let* ((end-of-block (next-single-property-change (point) 'crdt-id nil (point-max)))
+               (block-length (- end-of-block (point))))
+          (cl-case (cl-signum (- length block-length))
+            ((1) (delete-char block-length)
+             (cl-decf length block-length)
+             (crdt--set-id-offset id (+ (crdt--id-offset id) block-length)))
+            ((0) (delete-char length)
+             (setq length 0))
+            ((-1)
+             (let* ((starting-id (crdt--get-starting-id (point)))
+                    (left-offset (crdt--get-id-offset starting-id (point))))
+               (delete-char length)
+               (crdt--set-id (point) (crdt--id-replace-offset starting-id (+ left-offset length))))
+             (setq length 0)))))
+      ;; (crdt--verify-buffer)
+      )))
 
 (defun crdt--before-change (beg end)
   (unless crdt--inhibit-update
@@ -474,7 +473,9 @@ Returns a list of (insert type) messages to be sent."
         ;; ignore property only changes
         (save-excursion
           (goto-char beg)
-          (unless (and (= length (- end beg)) (looking-at (regexp-quote crdt--changed-string)))
+          (unless (and (= length (- end beg))
+                       (string-equal crdt--changed-string
+                                     (buffer-substring-no-properties beg end)))
             (widen)
             (with-silent-modifications
               (unless (= length 0)
@@ -484,30 +485,31 @@ Returns a list of (insert type) messages to be sent."
                 (dolist (message (crdt--local-insert beg end))
                   (crdt--broadcast-maybe
                    (format "%S" message)))))))))))
-
-(defun crdt--remote-cursor (message)
-  (cl-destructuring-bind
-      (site-id point-position-hint point-crdt-id-base64 mark-position-hint mark-crdt-id-base64) message
-    (let ((ov-pair (gethash site-id crdt--overlay-table)))
-      (if point-crdt-id-base64
-          (let* ((point (crdt--find-id (base64-decode-string point-crdt-id-base64) point-position-hint))
-                 (mark (if mark-crdt-id-base64
-                           (crdt--find-id (base64-decode-string mark-crdt-id-base64) mark-position-hint)
-                         point)))
-            (unless ov-pair
-              (let ((new-cursor (make-overlay 1 1))
-                    (new-region (make-overlay 1 1)))
-                (overlay-put new-cursor 'face `(:background ,(crdt--get-cursor-color site-id)))
-                (overlay-put new-cursor 'category 'crdt-pseudo-cursor)
-                (overlay-put new-region 'face `(:background ,(crdt--get-region-color site-id) :extend t))
-                (setq ov-pair (puthash site-id (cons new-cursor new-region)
-                                       crdt--overlay-table))))
-            (crdt--move-cursor (car ov-pair) point)
-            (crdt--move-region (cdr ov-pair) point mark))
-        (when ov-pair
-          (remhash site-id crdt--overlay-table)
-          (delete-overlay (car ov-pair))
-          (delete-overlay (cdr ov-pair)))))))
+(defsubst crdt--id-to-pos (id hint)
+  (if (> (string-bytes id) 0)
+      (1- (crdt--find-id id hint))
+    (point-max)))
+(defun crdt--remote-cursor (site-id point-position-hint point-crdt-id mark-position-hint mark-crdt-id)
+  (let ((ov-pair (gethash site-id crdt--overlay-table)))
+    (if point-crdt-id
+        (let* ((point (crdt--id-to-pos point-crdt-id point-position-hint))
+               (mark (if mark-crdt-id
+                         (crdt--id-to-pos mark-crdt-id mark-position-hint)
+                       point)))
+          (unless ov-pair
+            (let ((new-cursor (make-overlay 1 1))
+                  (new-region (make-overlay 1 1)))
+              (overlay-put new-cursor 'face `(:background ,(crdt--get-cursor-color site-id)))
+              (overlay-put new-cursor 'category 'crdt-pseudo-cursor)
+              (overlay-put new-region 'face `(:background ,(crdt--get-region-color site-id) :extend t))
+              (setq ov-pair (puthash site-id (cons new-cursor new-region)
+                                     crdt--overlay-table))))
+          (crdt--move-cursor (car ov-pair) point)
+          (crdt--move-region (cdr ov-pair) point mark))
+      (when ov-pair
+        (remhash site-id crdt--overlay-table)
+        (delete-overlay (car ov-pair))
+        (delete-overlay (cdr ov-pair))))))
 
 (cl-defun crdt--local-cursor (&optional (lazy t))
   (let ((point (point))
@@ -522,8 +524,8 @@ Returns a list of (insert type) messages to be sent."
               (overlays-in (point-max) (point-max))))
       (setq crdt--last-point point)
       (setq crdt--last-mark mark)
-      (let ((point-id-base64 (base64-encode-string (crdt--get-id (1- point))))
-            (mark-id-base64 (when mark (base64-encode-string (crdt--get-id (1- mark))))))
+      (let ((point-id-base64 (base64-encode-string (crdt--get-id point)))
+            (mark-id-base64 (when mark (base64-encode-string (crdt--get-id mark)))))
         `(cursor ,crdt--local-id
                  ,point ,point-id-base64 ,mark ,mark-id-base64)))))
 (defun crdt--post-command ()
@@ -620,8 +622,8 @@ to server unless WITHOUT is NIL."
                         (mark (if (eq point region-beg)
                                   (unless (eq point region-end) region-end)
                                 region-beg))
-                        (point-id-base64 (base64-encode-string (crdt--get-id (1- point))))
-                        (mark-id-base64 (when mark (base64-encode-string (crdt--get-id (1- mark))))))
+                        (point-id-base64 (base64-encode-string (crdt--get-id point)))
+                        (mark-id-base64 (when mark (base64-encode-string (crdt--get-id mark)))))
                    (process-send-string process
                                         (format "%S"
                                                 `(cursor ,site-id
@@ -641,13 +643,20 @@ to server unless WITHOUT is NIL."
 
 (cl-defgeneric crdt-process-message (message process))
 (cl-defmethod crdt-process-message ((message (head insert)) process)
-  (crdt--remote-insert (cdr message))
+  (cl-destructuring-bind (type crdt-id position-hint content) message
+    (crdt--remote-insert (base64-decode-string crdt-id) position-hint content))
   (crdt--broadcast-maybe (format "%S" message) (process-get process 'client-id)))
 (cl-defmethod crdt-process-message ((message (head delete)) process)
-  (crdt--remote-delete (cdr message))
+  (cl-destructuring-bind (type position-hint . id-base64-pairs) message
+    (mapc (lambda (p) (rplacd p (base64-decode-string (cdr p)))) id-base64-pairs)
+    (crdt--remote-delete position-hint id-base64-pairs))
   (crdt--broadcast-maybe (format "%S" message) (process-get process 'client-id)))
 (cl-defmethod crdt-process-message ((message (head cursor)) process)
-  (crdt--remote-cursor (cdr message))
+  (cl-destructuring-bind (type site-id point-position-hint point-crdt-id mark-position-hint mark-crdt-id) message
+    (crdt--remote-cursor site-id point-position-hint
+                         (and point-crdt-id (base64-decode-string point-crdt-id))
+                         mark-position-hint
+                         (and mark-crdt-id (base64-decode-string mark-crdt-id))))
   (crdt--broadcast-maybe (format "%S" message) (process-get process 'client-id)))
 (cl-defmethod crdt-process-message ((message (head sync)) process)
   (unless (crdt--server-p) ; server shouldn't receive this
@@ -696,7 +705,7 @@ to server unless WITHOUT is NIL."
         (goto-char (point-min))
         (let (message)
           (while (setq message (ignore-errors (read (current-buffer))))
-            ;; (print message)
+            (print message)
             (with-current-buffer (process-get process 'crdt-buffer)
               (save-excursion
                 (widen)
@@ -734,6 +743,11 @@ to server unless WITHOUT is NIL."
   (with-current-buffer (process-get process 'crdt-buffer)
     (unless (eq (process-status process) 'open)
       (crdt-stop-client))))
+(defun crdt--read-name ()
+  (if crdt-ask-for-name
+      (let ((input (read-from-minibuffer (format "Display name (default %S): " crdt-default-name))))
+        (if (> (length input) 0) input crdt-default-name))
+    crdt-default-name))
 (defun crdt-serve-buffer (port &optional password name)
   "Share the current buffer on PORT."
   (interactive "nPort: ")
@@ -753,8 +767,7 @@ to server unless WITHOUT is NIL."
           (when crdt-ask-for-password
             (read-from-minibuffer "Set password (empty for no authentication): "))))
   (unless name
-    (when crdt-ask-for-name
-      (setq name (read-from-minibuffer "Display name: "))))
+    (setq name (crdt--read-name)))
   (setq crdt--local-name name)
   (setq crdt--network-process
         (make-network-process
@@ -815,8 +828,7 @@ Open a new buffer to display the shared content."
   (interactive "MAddress: \nnPort: ")
   (switch-to-buffer (generate-new-buffer "CRDT Client"))
   (unless name
-    (when crdt-ask-for-name
-      (setq name (read-from-minibuffer "Display name: "))))
+    (setq name (crdt--read-name)))
   (setq crdt--local-name name)
   (setq crdt--network-process
         (make-network-process
