@@ -729,7 +729,7 @@ to server unless WITHOUT is NIL."
              (clear-contact-message `(contact ,client-id nil nil)))
         (crdt-process-message clear-cursor-message client)
         (crdt-process-message clear-contact-message client)
-        (crdt-refresh-users-maybe)))))
+        (crdt--refresh-users-maybe)))))
 (defun crdt--client-process-sentinel (process message)
   (with-current-buffer (process-get process 'crdt-buffer)
     (unless (eq (process-status process) 'open)
