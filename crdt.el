@@ -798,7 +798,7 @@ If CRDT--NETWORK-PROCESS is a server process, broadcast MESSAGE-STRING
 to clients except the one of which CLIENT-ID property is EQ to WITHOUT.
 If CRDT--NETWORK-PROCESS is a client process, send MESSAGE-STRING
 to server when WITHOUT is T."
-  (message "Send %s" message-string)
+  ;; (message "Send %s" message-string)
   (if (process-contact (crdt--network-process) :server)
       (dolist (client (crdt--network-clients))
         (when (and (eq (process-status client) 'open)
@@ -1032,7 +1032,7 @@ Must be called when CURRENT-BUFFER is a CRDT status buffer."
       (goto-char (point-min))
       (let (message)
         (while (setq message (ignore-errors (read (current-buffer))))
-          (print message)
+          ;; (print message)
           (cl-macrolet ((body ()
                           '(if (or (not (crdt--server-p)) (process-get process 'authenticated))
                             (let ((crdt--inhibit-update t))
