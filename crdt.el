@@ -989,7 +989,7 @@ Must be called when CURRENT-BUFFER is a CRDT status buffer."
                              (process-contact (crdt--network-process) :host)
                              (process-contact (crdt--network-process) :service)))))
       (crdt--broadcast-maybe (crdt--format-message
-                              `(hello nil ,(gnutls-hash-mac 'SHA1 password (cadr message))))))))
+                              `(hello ,(crdt--local-name) ,(gnutls-hash-mac 'SHA1 password (cadr message))))))))
 (cl-defmethod crdt-process-message ((message (head contact)) process)
   (cl-destructuring-bind
         (site-id display-name &optional host service) (cdr message)
