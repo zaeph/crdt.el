@@ -1057,7 +1057,7 @@ Must be called when CURRENT-BUFFER is a CRDT status buffer."
                                 (process-contact process :host) (process-contact process :service))
                        (if (crdt--server-p)
                            (delete-process process)
-                         (crdt-stop-client))))))
+                         (crdt-stop-session))))))
           (delete-region (point-min) (point))
           (goto-char (point-min)))))))
 (defun crdt--server-process-sentinel (client message)
