@@ -5,6 +5,7 @@
 ;; Author: Qiantan Hong <qhong@mit.edu>
 ;; Maintainer: Qiantan Hong <qhong@mit.edu>
 ;; Keywords: collaboration crdt
+;; Version: 0.0.0
 ;;
 ;; crdt.el is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -359,6 +360,8 @@ to avoid recusive calling of CRDT synchronization functions.")
 (crdt--defvar-session crdt--contact-table nil
                       "A hash table that maps SITE-ID to CRDT--CONTACT-METADATAs.")
 
+(defvar-local crdt--active-users-tmp nil)
+
 (cl-defstruct (crdt--overlay-metadata
                 (:constructor crdt--make-overlay-metadata
                               (lamport-timestamp species front-advance rear-advance plist))
@@ -516,7 +519,8 @@ Otherwise use a dedicated buffer for displaying active users on CRDT-BUFFER."
 (define-derived-mode crdt-buffer-menu-mode tabulated-list-mode
   "CRDT User List"
   (setq tabulated-list-format [("Buffer" 15 t)
-                               ("Network Name" 15 t)]))
+                               ("Network Name" 15 t)
+                               ("Users" 15 t)]))
 
 (defun crdt-list-buffer (&optional crdt-buffer display-buffer)
   "Display a list of buffers shared in the current CRDT session.
@@ -535,15 +539,38 @@ Otherwise use a dedicated buffer for displaying active users on CRDT-BUFFER."
       (setq display-buffer (crdt--buffer-menu-buffer)))
     (with-current-buffer crdt--status-buffer
       (crdt-refresh-buffers display-buffer))
-    (switch-to-buffer-other-window display-buffer)))
+    (if crdt--network-process
+        (switch-to-buffer display-buffer)
+      (switch-to-buffer-other-window display-buffer))))
+
+(defmacro crdt--with-current-buffer (buffer &rest body)
+  `(let ((crdt--the-buffer ,buffer))
+     (when crdt--the-buffer
+       (with-current-buffer crdt--the-buffer
+         ,@body))))
 
 (defun crdt-refresh-buffers (display-buffer)
   (with-current-buffer display-buffer
     (crdt-buffer-menu-mode)
     (setq tabulated-list-entries nil)
     (maphash (lambda (k v)
-               (push (list v (vector (buffer-name v) k))
-                     tabulated-list-entries))
+               (crdt--with-current-buffer
+                (gethash (crdt--contact-metadata-focused-buffer-name v)
+                         (crdt--buffer-table))
+                (push (crdt--contact-metadata-display-name v) crdt--active-users-tmp)))
+             (crdt--contact-table))
+    (crdt--with-current-buffer
+     (gethash (crdt--focused-buffer-name) (crdt--buffer-table))
+     (push (crdt--local-name)
+           crdt--active-users-tmp))
+    (maphash (lambda (k v)
+               (push (list v (vector (buffer-name v) k
+                                     (mapconcat #'identity
+                                                (with-current-buffer v crdt--active-users-tmp)
+                                                ", ")))
+                     tabulated-list-entries)
+               (with-current-buffer v
+                 (setq crdt--active-users-tmp nil)))
              (crdt--buffer-table))
     (tabulated-list-init-header)
     (tabulated-list-print)))
@@ -591,7 +618,7 @@ Otherwise use a dedicated buffer for displaying active users on CRDT-BUFFER."
     (unless display-buffer
       (unless (and (crdt--user-menu-buffer) (buffer-live-p (crdt--user-menu-buffer)))
         (setf (crdt--user-menu-buffer)
-              (generate-new-buffer (concat (buffer-name (current-buffer))
+              (generate-new-buffer (concat (car (rassq (crdt--network-process) crdt--session-alist))
                                            " users")))
         (crdt--assimilate-status-buffer (crdt--user-menu-buffer)))
       (setq display-buffer (crdt--user-menu-buffer)))
@@ -630,7 +657,7 @@ Otherwise use a dedicated buffer for displaying active users on CRDT-BUFFER."
 (defsubst crdt--refresh-users-maybe ()
   (when (and (crdt--user-menu-buffer) (buffer-live-p (crdt--user-menu-buffer)))
     (crdt-refresh-users (crdt--user-menu-buffer)))
-  (crdt--refresh-sessions-maybe))
+  (crdt--refresh-buffers-maybe))
 
 
 ;;; CRDT insert/delete
@@ -1312,37 +1339,40 @@ If SESSION-NAME is empty, use the buffer name of the current buffer."
     (push (cons session-name new-session) crdt--session-alist)
     new-session))
 
-(defun crdt-stop-session (session-name)
+(defun crdt-stop-session (&optional session-name)
   "Stop sharing the current session."
   (interactive
    (list (completing-read "Choose a session (create if not exist): "
                           crdt--session-alist nil t
                           (when crdt--status-buffer
                             (car (rassq (crdt--network-process) crdt--session-alist))))))
-  (let ((status-buffer
-         (process-get (cdr (assoc session-name crdt--session-alist)) 'status-buffer)))
-    (with-current-buffer status-buffer
-      (dolist (client crdt--network-clients)
-        (when (process-live-p client)
-          (delete-process client))
-        (when (process-buffer client)
-          (kill-buffer (process-buffer client))))
-      (when crdt--user-menu-buffer
-        (kill-buffer crdt--user-menu-buffer))
-      (maphash
-       (lambda (k v)
-         (with-current-buffer v
-           (setq crdt--status-buffer nil)
-           (crdt-mode 0)))
-       crdt--buffer-table)
-      (setq crdt--session-alist
-            (delq (cl-find-if (lambda (p) (eq (cdr p) crdt--network-process))
-                              crdt--session-alist)
-                  crdt--session-alist))
-      (crdt--refresh-sessions-maybe)
-      (delete-process crdt--network-process)
-      (message "Disconnected."))
-    (kill-buffer status-buffer)))
+  (let ((session (if session-name
+                     (cdr (assoc session-name crdt--session-alist))
+                   (crdt--network-process))))
+    (let ((status-buffer
+           (process-get session 'status-buffer)))
+      (with-current-buffer status-buffer
+        (dolist (client crdt--network-clients)
+          (when (process-live-p client)
+            (delete-process client))
+          (when (process-buffer client)
+            (kill-buffer (process-buffer client))))
+        (when crdt--user-menu-buffer
+          (kill-buffer crdt--user-menu-buffer))
+        (maphash
+         (lambda (k v)
+           (with-current-buffer v
+             (setq crdt--status-buffer nil)
+             (crdt-mode 0)))
+         crdt--buffer-table)
+        (setq crdt--session-alist
+              (delq (cl-find-if (lambda (p) (eq (cdr p) crdt--network-process))
+                                crdt--session-alist)
+                    crdt--session-alist))
+        (crdt--refresh-sessions-maybe)
+        (delete-process crdt--network-process)
+        (message "Disconnected."))
+      (kill-buffer status-buffer))))
 
 (defun crdt-connect (address port &optional name)
   "Connect to a CRDT server running at ADDRESS:PORT.
@@ -1376,7 +1406,7 @@ Open a new buffer to display the shared content."
 
 (defun crdt-test-client ()
   (interactive)
-  (crdt-connect "127.0.0.1" 1333))
+  (crdt-connect "127.0.0.1" 6530))
 
 (defun crdt-test-server ()
   (interactive)
