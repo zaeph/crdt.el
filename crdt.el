@@ -1259,7 +1259,7 @@ If SESSION-NAME is empty, use the buffer name of the current buffer."
     (let ((session (assoc session-name crdt--session-alist)))
       (if session
           (crdt--share-buffer (current-buffer) (cdr session))
-        (let ((port (read-from-minibuffer "Create new session on Port (default 1333): " nil nil t nil "1333")))
+        (let ((port (read-from-minibuffer "Create new session on port (default 6530): " nil nil t nil "6530")))
           (crdt--share-buffer (current-buffer) (crdt-new-session port session-name)))))))
 
 (defun crdt-stop-share-buffer ()
@@ -1312,34 +1312,37 @@ If SESSION-NAME is empty, use the buffer name of the current buffer."
     (push (cons session-name new-session) crdt--session-alist)
     new-session))
 
-(defun crdt-stop-session ()
+(defun crdt-stop-session (session-name)
   "Stop sharing the current session."
-  (interactive)
-  (if (not crdt--status-buffer)
-      (message "No CRDT session running on current buffer.")
-    (let ((status-buffer crdt--status-buffer))
-      (with-current-buffer status-buffer
-        (dolist (client crdt--network-clients)
-          (when (process-live-p client)
-            (delete-process client))
-          (when (process-buffer client)
-            (kill-buffer (process-buffer client))))
-        (when crdt--user-menu-buffer
-          (kill-buffer crdt--user-menu-buffer))
-        (maphash
-         (lambda (k v)
-           (with-current-buffer v
-             (setq crdt--status-buffer nil)
-             (crdt-mode 0)))
-         crdt--buffer-table)
-        (setq crdt--session-alist
-              (delq (cl-find-if (lambda (p) (eq (cdr p) crdt--network-process))
-                                crdt--session-alist)
-                    crdt--session-alist))
-        (crdt--refresh-sessions-maybe)
-        (delete-process crdt--network-process)
-        (message "Disconnected."))
-      (kill-buffer status-buffer))))
+  (interactive
+   (list (completing-read "Choose a session (create if not exist): "
+                          crdt--session-alist nil t
+                          (when crdt--status-buffer
+                            (car (rassq (crdt--network-process) crdt--session-alist))))))
+  (let ((status-buffer
+         (process-get (cdr (assoc session-name crdt--session-alist)) 'status-buffer)))
+    (with-current-buffer status-buffer
+      (dolist (client crdt--network-clients)
+        (when (process-live-p client)
+          (delete-process client))
+        (when (process-buffer client)
+          (kill-buffer (process-buffer client))))
+      (when crdt--user-menu-buffer
+        (kill-buffer crdt--user-menu-buffer))
+      (maphash
+       (lambda (k v)
+         (with-current-buffer v
+           (setq crdt--status-buffer nil)
+           (crdt-mode 0)))
+       crdt--buffer-table)
+      (setq crdt--session-alist
+            (delq (cl-find-if (lambda (p) (eq (cdr p) crdt--network-process))
+                              crdt--session-alist)
+                  crdt--session-alist))
+      (crdt--refresh-sessions-maybe)
+      (delete-process crdt--network-process)
+      (message "Disconnected."))
+    (kill-buffer status-buffer)))
 
 (defun crdt-connect (address port &optional name)
   "Connect to a CRDT server running at ADDRESS:PORT.
