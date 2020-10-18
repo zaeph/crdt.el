@@ -30,36 +30,36 @@ be invoked with no argument in any CRDT shared buffer to access or modify that s
   (it should be easy to migrate to a binary version.  Using text for better debugging for now)
   Every message takes the form (type . body)
   type can be: insert delete cursor hello challenge sync desync overlay-(add,move,put,remove)
-  - insert
+  - insert ::
     body takes the form =(buffer-name crdt-id position-hint content)=
     - =position-hint= is the buffer position where the operation happens at the site
       which generates the operation.  Then we can play the trick that start search
       near this position at other sites to speedup CRDT ID search
     - =content= is the string to be inserted
-  - delete
+  - delete ::
     body takes the form =(buffer-name position-hint (crdt-id . length)*)=
-  - cursor
+  - cursor ::
     body takes the form
          =(site-id point-position-hint point-crdt-id mark-position-hint mark-crdt-id)=
     =*-crdt-id= can be either a CRDT ID, or
       - =nil=, which means clear the point/mark
       - =""=, which means =(point-max)=
-  - contact
+  - contact ::
     body takes the form
          =(site-id name address port)=
     when name is =nil=, clear the contact for this =site-id=
-  - focus
+  - focus ::
     body takes the form =(site-id buffer-name)=
-  - hello
+  - hello ::
     This message is sent from client to server, when a client connect to the server.
     body takes the form =(client-name &optional response)=
-  - challenge
+  - challenge ::
     body takes the form =(salt)=
-  - login
+  - login ::
     It's always sent after server receives a hello message.
     Assigns an ID to the client
     body takes the form =(site-id session-name)=.
-  - sync
+  - sync ::
     This message is sent from server to client to get it sync to the state on the server.
     Might be used for error recovery or other optimization in the future.
     One optimization I have in mind is let server try to merge all CRDT item into a single
@@ -68,10 +68,10 @@ be invoked with no argument in any CRDT shared buffer to access or modify that s
     - =major-mode= is the major mode used at the server site
     - =content= is the string in the buffer
     - =crdt-id-list= is generated from =CRDT--DUMP-IDS=
-  - desync
+  - desync ::
     Indicates that the server has stopped sharing a buffer.
     body takes the form =(buffer-name)=
-  - overlay-add
+  - overlay-add ::
     body takes the form 
 #+BEGIN_SRC
 (buffer-name site-id logical-clock species
@@ -79,15 +79,15 @@ be invoked with no argument in any CRDT shared buffer to access or modify that s
   start-position-hint start-crdt-id
   end-position-hint end-crdt-id)
 #+END_SRC
-  - overlay-move
+  - overlay-move ::
     body takes the form
 #+BEGIN_SRC
 (buffer-name site-id logical-clock
   start-position-hint start-crdt-id
   end-position-hint end-crdt-id)
 #+END_SRC
-  - overlay-put
+  - overlay-put ::
     body takes the form =(buffer-name site-id logical-clock prop value)=
-  - overlay-remove
+  - overlay-remove ::
     body takes the form =(buffer-name site-id logical-clock)=
 
