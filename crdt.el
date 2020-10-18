@@ -671,22 +671,23 @@ Start the search from POS."
                    right-pos))))))))
 
 (defun crdt--remote-insert (id position-hint content)
-  (let ((crdt--inhibit-update t))
-    (let* ((beg (crdt--find-id id position-hint)) end)
-      (goto-char beg)
-      (insert content)
-      (setq end (point))
-      (with-silent-modifications
-        (crdt--with-insertion-information
-         (beg end)
-         (let ((base-length (- (string-bytes starting-id) 2)))
-           (if (and (eq (string-bytes id) (string-bytes starting-id))
-                    (eq t (compare-strings starting-id 0 base-length
-                                           id 0 base-length))
-                    (eq (1+ left-offset) (crdt--id-offset id)))
-               (put-text-property beg end 'crdt-id starting-id-pair)
-             (put-text-property beg end 'crdt-id (cons id t))))
-         (crdt--split-maybe)))))
+  (let* ((beg (crdt--find-id id position-hint)) end)
+    (goto-char beg)
+    (insert content)
+    (setq end (point))
+    (unless (get-text-property end 'crdt-id)
+      (setq end (next-single-property-change end 'crdt-id nil (point-max))))
+    (with-silent-modifications
+      (crdt--with-insertion-information
+       (beg end)
+       (let ((base-length (- (string-bytes starting-id) 2)))
+         (if (and (eq (string-bytes id) (string-bytes starting-id))
+                  (eq t (compare-strings starting-id 0 base-length
+                                         id 0 base-length))
+                  (eq (1+ left-offset) (crdt--id-offset id)))
+             (put-text-property beg end 'crdt-id starting-id-pair)
+           (put-text-property beg end 'crdt-id (cons id t))))
+       (crdt--split-maybe))))
   ;; (crdt--verify-buffer)
   )
 
