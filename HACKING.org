@@ -1,0 +1,93 @@
+* Algorithm
+
+This packages implements the Logoot split algorithm
+~André, Luc, et al. "Supporting adaptable granularity of changes for massive-scale collaborative editing." 9th IEEE International Conference on Collaborative Computing: Networking, Applications and Worksharing. IEEE, 2013.~
+    
+The CRDT-ID blocks are implemented by text property ='crdt-id=. A continous range of text with the same ='crdt-id'= property represent a CRDT-ID block. The ='crdt-id= is a a cons of =(ID-STRING . END-OF-BLOCK-P)=, where
+=ID-STRING= represent the CRDT-ID of the leftmost character in the block. If =END-OF-BLOCK-P= is =NIL=, the block is a non-rightmost segment splitted from a larger block, so insertion at the right of this block shouldn't be merged into the block by sharing the base CRDT-ID and increasing offset.
+
+=ID-STRING= is a unibyte string representing a CRDT-ID (for efficient comparison).
+Every two bytes represent a big endian encoded integer.
+For base IDs, last two bytes are always representing site ID.
+Stored strings are BASE-ID:OFFSETs. So the last two bytes represent offset,
+and second last two bytes represent site ID.
+
+* Session structure
+
+=CRDT--SESSION-LIST= is a list of "CRDT status buffer"s.
+Currently those buffers are always empty, but they have some buffer local variables,
+which are used as "session variables" that can be accessed from any buffer shared in the same session.
+For a buffer shared in some session, this buffer always has its buffer local variable
+=CRDT--STATUS-BUFFER= set to a CRDT status buffer. It can then access any session variables through it.
+For a network process dedicated to a session, its ='status-buffer= process property is always set to the status buffer for that session.
+The macro =CRDT--DEFVAR-SESSION= do the chores of defining a buffer local variable for status buffer,
+and creating a function (together with =SETF= setter) with the same name as the variables, and can
+be invoked with no argument in any CRDT shared buffer to access or modify that session variable.
+
+
+* Protocol
+  Text-based version
+  (it should be easy to migrate to a binary version.  Using text for better debugging for now)
+  Every message takes the form (type . body)
+  type can be: insert delete cursor hello challenge sync desync overlay-(add,move,put,remove)
+  - insert
+    body takes the form =(buffer-name crdt-id position-hint content)=
+    - =position-hint= is the buffer position where the operation happens at the site
+      which generates the operation.  Then we can play the trick that start search
+      near this position at other sites to speedup CRDT ID search
+    - =content= is the string to be inserted
+  - delete
+    body takes the form =(buffer-name position-hint (crdt-id . length)*)=
+  - cursor
+    body takes the form
+         =(site-id point-position-hint point-crdt-id mark-position-hint mark-crdt-id)=
+    =*-crdt-id= can be either a CRDT ID, or
+      - =nil=, which means clear the point/mark
+      - =""=, which means =(point-max)=
+  - contact
+    body takes the form
+         =(site-id name address port)=
+    when name is =nil=, clear the contact for this =site-id=
+  - focus
+    body takes the form =(site-id buffer-name)=
+  - hello
+    This message is sent from client to server, when a client connect to the server.
+    body takes the form =(client-name &optional response)=
+  - challenge
+    body takes the form =(salt)=
+  - login
+    It's always sent after server receives a hello message.
+    Assigns an ID to the client
+    body takes the form =(site-id session-name)=.
+  - sync
+    This message is sent from server to client to get it sync to the state on the server.
+    Might be used for error recovery or other optimization in the future.
+    One optimization I have in mind is let server try to merge all CRDT item into a single
+    one and try to synchronize this state to clients at best effort.
+    body takes the form =(buffer-name major-mode content . crdt-id-list)=
+    - =major-mode= is the major mode used at the server site
+    - =content= is the string in the buffer
+    - =crdt-id-list= is generated from =CRDT--DUMP-IDS=
+  - desync
+    Indicates that the server has stopped sharing a buffer.
+    body takes the form =(buffer-name)=
+  - overlay-add
+    body takes the form 
+#+BEGIN_SRC
+(buffer-name site-id logical-clock species
+  front-advance rear-advance
+  start-position-hint start-crdt-id
+  end-position-hint end-crdt-id)
+#+END_SRC
+  - overlay-move
+    body takes the form
+#+BEGIN_SRC
+(buffer-name site-id logical-clock
+  start-position-hint start-crdt-id
+  end-position-hint end-crdt-id)
+#+END_SRC
+  - overlay-put
+    body takes the form =(buffer-name site-id logical-clock prop value)=
+  - overlay-remove
+    body takes the form =(buffer-name site-id logical-clock)=
+
