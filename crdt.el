@@ -91,7 +91,7 @@
   (move-overlay ov (min pos mark) (max pos mark)))
 
 
-;;; CRDT ID utils
+;; CRDT ID utils
 ;; CRDT IDs are represented by unibyte strings (for efficient comparison)
 ;; Every two bytes represent a big endian encoded integer
 ;; For base IDs, last two bytes are always representing site ID
@@ -642,52 +642,70 @@ Start the search from POS."
                                                     'crdt-id nil (point-min)))
          (left-id (crdt--get-starting-id left-pos))
          (right-pos (next-single-property-change pos 'crdt-id nil (point-max)))
-         (right-id (crdt--get-starting-id right-pos)))
-    (cl-block nil
-      (while t
-        (print (list left-pos left-id right-pos right-id))
-        (cond ((<= right-pos (point-min))
-               (cl-return (point-min)))
-              ((>= left-pos (point-max))
-               (cl-return (point-max)))
-              ((and right-id (not (string< id right-id)))
-               (setq left-pos right-pos)
-               (setq left-id right-id)
-               (setq right-pos (next-single-property-change right-pos 'crdt-id nil (point-max)))
-               (setq right-id (crdt--get-starting-id right-pos)))
-              ((or (not left-id) (string< id left-id))
-               (setq right-pos left-pos)
-               (setq right-id left-id)
-               (setq left-pos (previous-single-property-change left-pos 'crdt-id nil (point-min)))
-               (setq left-id (crdt--get-starting-id left-pos)))
-              (t
-               ;; will unibyte to multibyte conversion cause any problem?
-               (cl-return
-                 (if (eq t (compare-strings left-id 0 (- (string-bytes left-id) 2)
-                                            id 0 (- (string-bytes left-id) 2)))
-                     (min right-pos (+ left-pos (if before 0 1)
-                                       (- (crdt--get-two-bytes id (- (string-bytes left-id) 2))
-                                          (crdt--id-offset left-id))))
-                   right-pos))))))))
+         (right-id (crdt--get-starting-id right-pos))
+         (moving-forward nil))
+    (cl-macrolet ((move-forward ()
+                    '(progn
+                      (setq moving-forward t)
+                      (setq left-pos right-pos)
+                      (setq left-id right-id)
+                      (setq right-pos (next-single-property-change right-pos 'crdt-id nil (point-max)))
+                      (setq right-id (crdt--get-starting-id right-pos))))
+                  (move-backward ()
+                    '(progn
+                      (setq moving-forward nil)
+                      (setq right-pos left-pos)
+                      (setq right-id left-id)
+                      (setq left-pos (previous-single-property-change left-pos 'crdt-id nil (point-min)))
+                      (setq left-id (crdt--get-starting-id left-pos)))))
+      (cl-block nil
+        (while t
+          (cond ((<= right-pos (point-min))
+                 (cl-return (point-min)))
+                ((>= left-pos (point-max))
+                 (cl-return (point-max)))
+                ((and right-id (not (string< id right-id)))
+                 (move-forward))
+                ((not left-id)
+                 (if moving-forward
+                     (move-forward)
+                   (move-backward)))
+                ((string< id left-id)
+                 (move-backward))
+                (t
+                 ;; will unibyte to multibyte conversion cause any problem?
+                 (cl-return
+                   (if (eq t (compare-strings left-id 0 (- (string-bytes left-id) 2)
+                                              id 0 (- (string-bytes left-id) 2)))
+                       (min right-pos (+ left-pos (if before 0 1)
+                                         (- (crdt--get-two-bytes id (- (string-bytes left-id) 2))
+                                            (crdt--id-offset left-id))))
+                     right-pos)))))))))
 
 (defun crdt--remote-insert (id position-hint content)
   (let* ((beg (crdt--find-id id position-hint)) end)
     (goto-char beg)
     (insert content)
     (setq end (point))
-    (unless (get-text-property end 'crdt-id)
-      (setq end (next-single-property-change end 'crdt-id nil (point-max))))
+    ;; work around for input method overlays
+    (cl-loop for ov in (overlays-at beg)
+          do (unless (overlay-get ov 'crdt-meta)
+               (when (eq (overlay-start ov) beg)
+                 (move-overlay ov end (overlay-end ov)))))
     (with-silent-modifications
-      (crdt--with-insertion-information
-       (beg end)
-       (let ((base-length (- (string-bytes starting-id) 2)))
-         (if (and (eq (string-bytes id) (string-bytes starting-id))
-                  (eq t (compare-strings starting-id 0 base-length
-                                         id 0 base-length))
-                  (eq (1+ left-offset) (crdt--id-offset id)))
-             (put-text-property beg end 'crdt-id starting-id-pair)
-           (put-text-property beg end 'crdt-id (cons id t))))
-       (crdt--split-maybe))))
+      (let ((real-end end))
+        (unless (get-text-property end 'crdt-id)
+          (setq end (next-single-property-change end 'crdt-id nil (point-max))))
+        (crdt--with-insertion-information
+         (beg end)
+         (let ((base-length (- (string-bytes starting-id) 2)))
+           (if (and (eq (string-bytes id) (string-bytes starting-id))
+                    (eq t (compare-strings starting-id 0 base-length
+                                           id 0 base-length))
+                    (eq (1+ left-offset) (crdt--id-offset id)))
+               (put-text-property beg real-end 'crdt-id starting-id-pair)
+             (put-text-property beg real-end 'crdt-id (cons id t))))
+         (crdt--split-maybe)))))
   ;; (crdt--verify-buffer)
   )
 
@@ -732,17 +750,14 @@ Start the search from POS."
       )))
 
 (defun crdt--before-change (beg end)
-  (print (list beg end crdt--inhibit-update))
   (unless crdt--inhibit-update
-    (setq crdt--changed-string (buffer-substring beg end)))
-  (print crdt--changed-string))
+    (setq crdt--changed-string (buffer-substring beg end))))
 
 (defun crdt--after-change (beg end length)
   (mapc (lambda (ov)
           (when (eq (overlay-get ov 'category) 'crdt-pseudo-cursor)
             (crdt--move-cursor ov beg)))
         (overlays-in beg (min (point-max) (1+ beg))))
-  (print (list 1 crdt--changed-string (buffer-substring-no-properties beg end)))
   (when (crdt--local-id) ; CRDT--LOCAL-ID is NIL when a client haven't received the first sync message
     (unless crdt--inhibit-update
       (let ((crdt--inhibit-update t))
@@ -750,7 +765,6 @@ Start the search from POS."
         ;; ignore property only changes
         (save-excursion
           (goto-char beg)
-          (print (list crdt--changed-string (buffer-substring-no-properties beg end)))
           (unless (and (= length (- end beg))
                        (string-equal crdt--changed-string
                                      (buffer-substring-no-properties beg end)))
@@ -877,7 +891,7 @@ If CRDT--NETWORK-PROCESS is a server process, broadcast MESSAGE-STRING
 to clients except the one of which CLIENT-ID property is EQ to WITHOUT.
 If CRDT--NETWORK-PROCESS is a client process, send MESSAGE-STRING
 to server when WITHOUT is T."
-  ;; (message "Send %s" message-string)
+  (message "Send %s" message-string)
   (if (process-contact (crdt--network-process) :server)
       (dolist (client (crdt--network-clients))
         (when (and (eq (process-status client) 'open)
@@ -1127,7 +1141,7 @@ Must be called when CURRENT-BUFFER is a CRDT status buffer."
       (goto-char (point-min))
       (let (message)
         (while (setq message (ignore-errors (read (current-buffer))))
-          ;; (print message)
+          (print message)
           (cl-macrolet ((body ()
                           '(if (or (not (crdt--server-p)) (process-get process 'authenticated))
                             (let ((crdt--inhibit-update t))
