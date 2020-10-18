@@ -1,4 +1,5 @@
 * Introduction
+
 ~crdt.el~ is a real-time collaborative editing environment for Emacs using Conflict-free Replicated Data Types.
 
 Highlights:
@@ -6,30 +7,62 @@ Highlights:
 - Share multiple buffer in one session
 - See other users' cursor and region
 - (experimental) synchronize Org mode folding status
+
 * Usage
+
 ** Installation
+
 Just =M-x load-file= =crdt.el=, or =M-x eval-buffer= in =crdt.el=,
 or =(require 'crdt)=. Or whatever package management tool you use.
-** Share a buffer
-In that buffer, =M-x crdt-share-buffer=. Then enter session name.
 
-If a new session is to be created, enter port, optional password and your display name.
-If there's a existing session with the name, current buffer is added to that session.
-** Connect to a shared buffer
-=M-x crdt-connect=
-** List active users.
+** Start a shared session
+
+A shared session is a place that can contains multiple buffers (or files),
+and multiple users can join to collaboratively edit those buffers (or files).
+Think about a meeting room with some people working together on some papers.
+
+In some buffer, =M-x crdt-share-buffer=. Then enter session name.
+This add the current buffer to the existing session with that name.
+If no such exists, it creates a new session with the provided session name,
+and initially contains the current buffer as a shared buffer.
+
+If a new session is to be created, you need to enter port (default to 6530),
+optional password and your display name (default to your current =(USER-FULL-NAME)=).
+
+** Join a session
+
+=M-x crdt-connect=, then enter address, port, and your display name.
+
+** List active users
+
 In a CRDT shared buffer (either server or client), =M-x crdt-list-users=.
 
 In the displayed user list, press ~RET~ on an entry to goto that user's cursor position.
-** List all sessions, and buffer in current session.
+
+** List all sessions, and buffer in current session
+
 =M-x crdt-list-sessions= lists all sessions.
+
 =M-x crdt-list-buffers= lists all buffers in current session. Or you can also 
 press ~RET~ in the session list to see buffers in the selected session.
-** Stop sharing.
-=M-x crdt-stop-session= stops the current session. You can also press ~k~ in the session list.
+
+** Stop sharing
+
+=M-x crdt-stop-session= stops a session you've started and disconnect all other users from it.
+This will ask for your confirmation, customize =crdt-confirm-stop-session= if you want to disable it.
+
+You can also press ~k~ in the session list (show it by =M-x crdt-list-sessions=).
 
 =M-x crdt-stop-share-buffer= removes current buffer from its CRDT session 
 (this operation is only allowed at server side). Or press ~k~ in the buffer list.
+
+** Disconnect from a session
+
+=M-x crdt-disconnect=, then choose a session to disconnect from.
+
+You can also press ~k~ in the session list (show it by =M-x crdt-list-sessions=).
+
 ** Synchronizing Org folding status
+
 Turn on =crdt-org-sync-overlay-mode=. All peers that have this enabled have their
 folding status synchronized. Peers without enabling this minor mode are unaffected.
