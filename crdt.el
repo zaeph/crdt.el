@@ -645,6 +645,7 @@ Start the search from POS."
          (right-id (crdt--get-starting-id right-pos)))
     (cl-block nil
       (while t
+        (print (list left-pos left-id right-pos right-id))
         (cond ((<= right-pos (point-min))
                (cl-return (point-min)))
               ((>= left-pos (point-max))
@@ -654,7 +655,7 @@ Start the search from POS."
                (setq left-id right-id)
                (setq right-pos (next-single-property-change right-pos 'crdt-id nil (point-max)))
                (setq right-id (crdt--get-starting-id right-pos)))
-              ((string< id left-id)
+              ((or (not left-id) (string< id left-id))
                (setq right-pos left-pos)
                (setq right-id left-id)
                (setq left-pos (previous-single-property-change left-pos 'crdt-id nil (point-min)))
@@ -1296,7 +1297,7 @@ If SESSION-NAME is empty, use the buffer name of the current buffer."
                           (when crdt--status-buffer (crdt--session-name)))))
   (let ((status-buffer (if session-name
                            (crdt--get-session session-name)
-                         (crdt--network-process))))
+                         crdt--status-buffer)))
     (with-current-buffer status-buffer
       (dolist (client crdt--network-clients)
         (when (process-live-p client)
