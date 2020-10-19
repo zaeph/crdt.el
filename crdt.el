@@ -394,7 +394,7 @@ to avoid recusive calling of CRDT synchronization functions.")
   (setq tabulated-list-format [("Session Name" 15 t)
                                ("Role" 7 t)
                                ("My Name" 15 t)
-                               ("Buffers" 15 t)
+                               ("Buffers" 30 t)
                                ("Users" 15 t)]))
 
 (defun crdt-list-sessions (&optional crdt-buffer display-buffer)
@@ -1329,7 +1329,7 @@ Disconnect if it's a client session, or stop serving if it's a server session."
     (when (if (and crdt-confirm-stop-session
                    (crdt--server-p)
                    crdt--network-clients)
-              (yes-or-no-p "Stopping the session will disconnect every client, proceed? ")
+              (yes-or-no-p "There are clients connected to this session, disconnect them and stop the session anyway? ")
             t)
       (dolist (client crdt--network-clients)
         (when (process-live-p client)
