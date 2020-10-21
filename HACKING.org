@@ -89,6 +89,10 @@ be invoked with no argument in any CRDT shared buffer to access or modify that s
     Indicates that the server has stopped sharing a buffer.
     body takes the form =(buffer-name)=
 
+  - resync ::
+    (TODO) Request the server to resend =sync= message for a buffer.
+    body takes the form =(buffer-name)=
+
   - overlay-add ::
     body takes the form 
 #+BEGIN_SRC

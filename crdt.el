@@ -485,7 +485,7 @@ Otherwise use a dedicated buffer for displaying active users on CRDT-BUFFER."
 
 (defmacro crdt--with-current-buffer (buffer &rest body)
   `(let ((crdt--the-buffer ,buffer))
-     (when crdt--the-buffer
+     (when (and crdt--the-buffer (buffer-live-p crdt--the-buffer))
        (with-current-buffer crdt--the-buffer
          ,@body))))
 
@@ -933,6 +933,30 @@ to server when WITHOUT is T."
 (defun crdt--generate-challenge ()
   (apply #'unibyte-string (cl-loop for i below 32 collect (random 256))))
 
+(defsubst crdt--sync-buffer-to-client (buffer process)
+  (with-current-buffer buffer
+    (process-send-string process (crdt--format-message `(sync
+                                                         ,crdt--buffer-network-name
+                                                         ,major-mode
+                                                         ,@ (crdt--dump-ids (point-min) (point-max) nil nil t))))
+    ;; synchronize cursor
+    (maphash (lambda (site-id ov-pair)
+               (cl-destructuring-bind (cursor-ov . region-ov) ov-pair
+                 (let* ((point (overlay-start cursor-ov))
+                        (region-beg (overlay-start region-ov))
+                        (region-end (overlay-end region-ov))
+                        (mark (if (eq point region-beg)
+                                  (unless (eq point region-end) region-end)
+                                region-beg))
+                        (point-id-base64 (base64-encode-string (crdt--get-id point)))
+                        (mark-id-base64 (when mark (base64-encode-string (crdt--get-id mark)))))
+                   (process-send-string process
+                                        (crdt--format-message
+                                         `(cursor ,crdt--buffer-network-name ,site-id
+                                                  ,point ,point-id-base64 ,mark ,mark-id-base64))))))
+             crdt--pseudo-cursor-table)
+    (process-send-string process (crdt--format-message (crdt--local-cursor nil)))))
+
 (defun crdt--greet-client (process)
   (with-current-buffer (process-get process 'status-buffer)
     (cl-pushnew process crdt--network-clients)
@@ -947,28 +971,7 @@ to server when WITHOUT is T."
                                               ,crdt--session-name)))
         (cl-incf crdt--next-client-id))
       (maphash (lambda (k buffer)
-                 (with-current-buffer buffer
-                   (process-send-string process (crdt--format-message `(sync
-                                                                        ,crdt--buffer-network-name
-                                                                        ,major-mode
-                                                                        ,@ (crdt--dump-ids (point-min) (point-max) nil nil t))))
-                   ;; synchronize cursor
-                   (maphash (lambda (site-id ov-pair)
-                              (cl-destructuring-bind (cursor-ov . region-ov) ov-pair
-                                (let* ((point (overlay-start cursor-ov))
-                                       (region-beg (overlay-start region-ov))
-                                       (region-end (overlay-end region-ov))
-                                       (mark (if (eq point region-beg)
-                                                 (unless (eq point region-end) region-end)
-                                               region-beg))
-                                       (point-id-base64 (base64-encode-string (crdt--get-id point)))
-                                       (mark-id-base64 (when mark (base64-encode-string (crdt--get-id mark)))))
-                                  (process-send-string process
-                                                       (crdt--format-message
-                                                        `(cursor ,crdt--buffer-network-name ,site-id
-                                                                 ,point ,point-id-base64 ,mark ,mark-id-base64))))))
-                            crdt--pseudo-cursor-table)
-                   (process-send-string process (crdt--format-message (crdt--local-cursor nil)))))
+                 (crdt--sync-buffer-to-client buffer process))
                crdt--buffer-table)
       ;; synchronize contact
       (maphash (lambda (k v)
@@ -1234,6 +1237,7 @@ Must be called when CURRENT-BUFFER is a CRDT status buffer."
                                    ,major-mode
                                    ,(buffer-substring-no-properties (point-min) (point-max))
                                    ,@ (crdt--dump-ids (point-min) (point-max) nil)))))
+        (add-hook 'kill-buffer-hook #'crdt-stop-share-buffer nil t)
         (crdt--refresh-buffers-maybe)
         (crdt--refresh-sessions-maybe))
     (error "Only server can add new buffer")))
@@ -1340,9 +1344,10 @@ Disconnect if it's a client session, or stop serving if it's a server session."
         (kill-buffer crdt--user-menu-buffer))
       (maphash
        (lambda (k v)
-         (with-current-buffer v
-           (setq crdt--status-buffer nil)
-           (crdt-mode 0)))
+         (when (buffer-live-p v)
+           (with-current-buffer v
+             (setq crdt--status-buffer nil)
+             (crdt-mode 0))))
        crdt--buffer-table)
       (setq crdt--session-list
             (delq status-buffer crdt--session-list))
