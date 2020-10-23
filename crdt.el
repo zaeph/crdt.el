@@ -48,6 +48,9 @@
 and there are some client connected to it currently."
   :type 'boolean)
 
+(defvar crdt--log-network-traffic nil
+  "Debug switch to log network traffic to *Messages*.")
+
 (require 'cl-lib)
 
 (require 'subr-x)
@@ -928,7 +931,6 @@ If INCLUDE-CONTENT is non-NIL, the list contains STRING instead of LENGTH."
                                 (t (substring object prev-pos pos)))
                         (- pos prev-pos))
                       (cl-destructuring-bind (id . eob) (crdt--get-crdt-id-pair prev-pos object)
-                        (print omit-end-of-block-p)
                         (let ((id-base64 (base64-encode-string id)))
                           (if omit-end-of-block-p (list id-base64) (list id-base64 eob)))))
                 ids))
@@ -975,7 +977,8 @@ If CRDT--NETWORK-PROCESS is a server process, broadcast MESSAGE-STRING
 to clients except the one of which CLIENT-ID property is EQ to WITHOUT.
 If CRDT--NETWORK-PROCESS is a client process, send MESSAGE-STRING
 to server when WITHOUT is T."
-  (message "Send %s" message-string)
+  (when crdt--log-network-traffic
+    (message "Send %s" message-string))
   (if (process-contact (crdt--network-process) :server)
       (dolist (client (crdt--network-clients))
         (when (and (eq (process-status client) 'open)
@@ -1041,7 +1044,8 @@ to server when WITHOUT is T."
                  (cl-loop for (prop value) on (crdt--overlay-metadata-plist meta) by #'cddr
                        do (process-send-string
                            process
-                           (crdt--format-message `(overlay-put ,(car k) ,(cdr k) ,prop ,value))))))
+                           (crdt--format-message `(overlay-put ,crdt--buffer-network-name
+                                                               ,(car k) ,(cdr k) ,prop ,value))))))
              crdt--overlay-table)
 
     (process-send-string process (crdt--format-message `(ready ,crdt--buffer-network-name)))))
@@ -1225,7 +1229,8 @@ to server when WITHOUT is T."
       (goto-char (point-min))
       (let (message)
         (while (setq message (ignore-errors (read (current-buffer))))
-          (print message)
+          (when crdt--log-network-traffic
+            (print message))
           (cl-macrolet ((body ()
                           '(if (or (not (crdt--server-p)) (process-get process 'authenticated))
                             (let ((crdt--inhibit-update t))
@@ -1464,7 +1469,8 @@ Open a new buffer to display the shared content."
    (list (let ((address
                 (read-from-minibuffer "Address: " nil nil nil 'crdt-connect-address-history)))
            (when (eq (length address) 0)
-             (error "Please input a valid address")))
+             (error "Please input a valid address"))
+           address)
          (let ((port (read-from-minibuffer "Port (default 6530): " nil nil t nil "6530")))
            (when (not (numberp port))
              (error "Port must be a number"))
