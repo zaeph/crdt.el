@@ -514,7 +514,7 @@ Only server can perform this action."
 (define-derived-mode crdt-buffer-menu-mode tabulated-list-mode
   "CRDT User List"
   (setq tabulated-list-format [("Local Buffer" 15 t)
-                               ("Network Name" 15 t)
+                               ("Network Name" 30 t)
                                ("Users" 15 t)]))
 
 (defun crdt-list-buffer (&optional crdt-buffer display-buffer)
@@ -600,7 +600,7 @@ Otherwise use a dedicated buffer for displaying active users on CRDT-BUFFER."
 (define-derived-mode crdt-user-menu-mode tabulated-list-mode
   "CRDT User List"
   (setq tabulated-list-format [("Display Name" 15 t)
-                               ("Focused Buffer" 15 t)
+                               ("Focused Buffer" 30 t)
                                ("Address" 15 t)
                                ("Port" 7 t)]))
 
@@ -1330,10 +1330,15 @@ If SESSION-NAME is empty, use the buffer name of the current buffer."
    (progn
      (when (and crdt-mode crdt--status-buffer)
        (error "Current buffer is already shared in a CRDT session"))
-     (list (let ((session-name (completing-read "Choose a server session (create if not exist): "
-                                                (crdt--get-session-names t))))
+     (list (let* ((session-names (crdt--get-session-names t))
+                  (default-name (concat crdt-default-name ":" (buffer-name (current-buffer))))
+                  (session-name (if session-names
+                                    (completing-read "Choose a server session (create if not exist): "
+                                                     session-names)
+                                  (read-from-minibuffer
+                                   (format "New session name (default %s): " default-name)))))
              (unless (and session-name (> (length session-name) 0))
-               (setq session-name (buffer-name (current-buffer))))
+               (setq session-name default-name))
              session-name))))
   (let ((session (crdt--get-session session-name)))
     (if session
