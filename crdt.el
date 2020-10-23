@@ -423,7 +423,7 @@ after synchronization is completed."
   (interactive)
   (with-current-buffer
       (tabulated-list-get-id)
-    (crdt-list-buffer)))
+    (crdt-list-buffers)))
 
 (defun crdt--session-menu-kill ()
   "Kill the session under point in CRDT session menu."
@@ -520,7 +520,7 @@ Only server can perform this action."
                                ("Network Name" 30 t)
                                ("Users" 15 t)]))
 
-(defun crdt-list-buffer (&optional crdt-buffer display-buffer)
+(defun crdt-list-buffers (&optional crdt-buffer display-buffer)
   "Display a list of buffers shared in the current CRDT session.
 If DISPLAY-BUFFER is provided, display the output there.
 Otherwise use a dedicated buffer for displaying active users on CRDT-BUFFER."
@@ -1501,7 +1501,7 @@ Open a new buffer to display the shared content."
         (setq crdt--contact-table (make-hash-table :test 'equal))
         (setq crdt--buffer-table (make-hash-table :test 'equal))
         (setq crdt--status-buffer (current-buffer)))
-    (crdt-list-buffer)))
+    (crdt-list-buffers)))
 
 (defun crdt-test-client ()
   (interactive)
