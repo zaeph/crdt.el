@@ -12,7 +12,7 @@ elpa: *.el
 	mkdir -p "$$dir"; \
 	cp $$(find . -name \*.el) crdt-$$version; \
 	echo "(define-package \"crdt\" \"$$version\" \
-	\"Modular in-buffer completion framework\")" \
+	\"Simultaneous text editing over network\")" \
 	> "$$dir"/crdt-pkg.el; \
 	tar cvf crdt-$$version.tar --mode 644 "$$dir"
 
