@@ -50,7 +50,7 @@ be invoked with no argument in any CRDT shared buffer to access or modify that s
 
   - cursor ::
     body takes the form
-         =(site-id point-position-hint point-crdt-id mark-position-hint mark-crdt-id)=
+         =(buffer-name site-id point-position-hint point-crdt-id mark-position-hint mark-crdt-id)=
     =*-crdt-id= can be either a CRDT ID, or
       - =nil=, which means clear the point/mark
       - =""=, which means =(point-max)=
@@ -85,11 +85,15 @@ be invoked with no argument in any CRDT shared buffer to access or modify that s
     - =content= is the string in the buffer
     - =crdt-id-list= is generated from =CRDT--DUMP-IDS=
 
-  - desync ::
-    Indicates that the server has stopped sharing a buffer.
-    body takes the form =(buffer-name)=
+  - add ::
+    Indicates that the server has started sharing some buffers.
+    body takes the form =buffer-name-list=
 
-  - resync ::
+  - remove ::
+    Indicates that the server has stopped sharing some buffers.
+    body takes the form =buffer-name-list=
+
+  - get ::
     (TODO) Request the server to resend =sync= message for a buffer.
     body takes the form =(buffer-name)=
 
