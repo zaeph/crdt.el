@@ -1450,42 +1450,47 @@ If SESSION-NAME is nil, stop sharing the current session."
                          crdt--status-buffer)))
     (crdt--stop-session status-buffer)))
 
+(defvar crdt-connect-address-history nil)
+
 (defun crdt-connect (address port &optional name)
   "Connect to a CRDT server running at ADDRESS:PORT.
 Open a new buffer to display the shared content."
   (interactive
-   (list (read-from-minibuffer "Address: ")
+   (list (let ((address
+                (read-from-minibuffer "Address: " nil nil nil 'crdt-connect-address-history)))
+           (when (eq (length address) 0)
+             (error "Please input a valid address")))
          (let ((port (read-from-minibuffer "Port (default 6530): " nil nil t nil "6530")))
            (when (not (numberp port))
              (error "Port must be a number"))
            port)))
   (unless name
     (setq name (crdt--read-name)))
-  (crdt-list-buffer (with-current-buffer
-                        (with-current-buffer (generate-new-buffer "*crdt-client*")
-                          (setq crdt--local-name name)
-                          (condition-case err
-                              (setq crdt--network-process
-                                    (make-network-process
-                                     :name "CRDT Client"
-                                     :buffer (current-buffer)
-                                     :host address
-                                     :family 'ipv4
-                                     :service port
-                                     :filter #'crdt--network-filter
-                                     :sentinel #'crdt--client-process-sentinel
-                                     :plist `(status-buffer ,(current-buffer))))
-                            (t (kill-buffer (current-buffer))
-                               (signal (car err) (cdr err))))
-                          (setq crdt--session-name (format "%s:%s" address port))
-                          (push (current-buffer) crdt--session-list)
-                          (setq crdt--local-clock 0)
-                          (process-send-string crdt--network-process
-                                               (crdt--format-message `(hello ,name)))
-                          (setq crdt--contact-table (make-hash-table :test 'equal))
-                          (setq crdt--buffer-table (make-hash-table :test 'equal))
-                          (setq crdt--status-buffer (current-buffer)))
-                      )))
+  (with-current-buffer
+      (with-current-buffer (generate-new-buffer "*crdt-client*")
+        (setq crdt--local-name name)
+        (condition-case err
+            (setq crdt--network-process
+                  (make-network-process
+                   :name "CRDT Client"
+                   :buffer (current-buffer)
+                   :host address
+                   :family 'ipv4
+                   :service port
+                   :filter #'crdt--network-filter
+                   :sentinel #'crdt--client-process-sentinel
+                   :plist `(status-buffer ,(current-buffer))))
+          (t (kill-buffer (current-buffer))
+             (signal (car err) (cdr err))))
+        (setq crdt--session-name (format "%s:%s" address port))
+        (push (current-buffer) crdt--session-list)
+        (setq crdt--local-clock 0)
+        (process-send-string crdt--network-process
+                             (crdt--format-message `(hello ,name)))
+        (setq crdt--contact-table (make-hash-table :test 'equal))
+        (setq crdt--buffer-table (make-hash-table :test 'equal))
+        (setq crdt--status-buffer (current-buffer)))
+    (crdt-list-buffer)))
 
 (defun crdt-test-client ()
   (interactive)
