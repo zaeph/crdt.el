@@ -831,6 +831,10 @@ Start the search from POS."
     (setq crdt--changed-string (buffer-substring beg end))))
 
 (defun crdt--after-change (beg end length)
+  (when (markerp beg)
+    (setq beg (marker-position beg)))
+  (when (markerp end)
+    (setq end (marker-position end)))
   (mapc (lambda (ov)
           (when (eq (overlay-get ov 'category) 'crdt-pseudo-cursor)
             (crdt--move-cursor ov beg)))
