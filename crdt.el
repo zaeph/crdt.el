@@ -712,7 +712,7 @@ Returns a list of (insert type) messages to be sent."
 (defun crdt--find-id (id pos &optional before)
   "Find the first position *after* ID if BEFORE is NIL or *before* ID otherwise.
 Start the search from POS."
-  (let* ((left-pos (previous-single-property-change (if (< pos (point-max)) (1+ pos) pos)
+  (let* ((left-pos (previous-single-property-change (min (1+ pos) (point-max))
                                                     'crdt-id nil (point-min)))
          (left-id (crdt--get-starting-id left-pos))
          (right-pos (next-single-property-change pos 'crdt-id nil (point-max)))
