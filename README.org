@@ -30,6 +30,37 @@ and initially contains the current buffer as a shared buffer.
 If a new session is to be created, you need to enter port (default to 6530),
 optional password and your display name (default to your current =(USER-FULL-NAME)=).
 
+** What if I don't have a public IP?
+
+There're various workaround.
+
+- You can use Teredo to get a public routable IPv6 address. 
+  One free software implementation is Miredo. Get it from your
+  favorite package manager or from [[https://www.remlab.net/miredo/][their website]].
+  A typical usage is (run as root)
+  #+BEGIN_SRC
+# /usr/local/sbin/miredo
+# ifconfig teredo
+  #+END_SRC
+  The =ifconfig= command should print the information of your IPv6 address.
+  Now your traffic go through IPv6, and once you start a =crdt.el= session,
+  your friends should be able to join using the IPv6 address.
+  For more information, see the user guide on the Miredo website.
+
+- You can use SSH port forwarding if you have a VPS with public IP.
+  Example usage:
+  #+BEGIN_SRC 
+$ ssh -R EXAMPLE.COM:6530:127.0.0.1:6530 EXAMPLE.COM
+  #+END_SRC
+  This make your =crdt.el= session on local port =6530= accessible from
+  =EXAMPLE.COM:6530=.
+  
+  Note that you need to set the following =/etc/ssh/sshd_config= option on 
+  your VPS
+  #+BEGIN_SRC 
+GatewayPorts yes
+  #+END_SRC
+  
 ** Join a session
 
 =M-x crdt-connect=, then enter address, port, and your display name.
