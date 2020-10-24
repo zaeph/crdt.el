@@ -830,6 +830,19 @@ Start the search from POS."
   (unless crdt--inhibit-update
     (setq crdt--changed-string (buffer-substring beg end))))
 
+(defsubst crdt--crdt-id-assimilate (template beg &optional object)
+  "Make the CRDT-ID property after BEG in OBJECT the same as TEMPLATE.
+TEMPLATE should be a string. If OBJECT is NIL, use current buffer."
+  (let (next-pos
+        (pos 0)
+        (limit (length template)))
+    (while (< pos limit)
+      (setq next-pos (next-single-property-change pos 'crdt-id template limit))
+      (put-text-property (+ beg pos) (+ beg next-pos) 'crdt-id
+                         (get-text-property pos 'crdt-id template)
+                         object)
+      (setq pos next-pos))))
+
 (defun crdt--after-change (beg end length)
   (when (markerp beg)
     (setq beg (marker-position beg)))
@@ -846,9 +859,10 @@ Start the search from POS."
         ;; ignore property only changes
         (save-excursion
           (goto-char beg)
-          (unless (and (= length (- end beg))
+          (if (and (= length (- end beg))
                        (string-equal crdt--changed-string
                                      (buffer-substring-no-properties beg end)))
+              (crdt--crdt-id-assimilate crdt--changed-string beg)
             (widen)
             (with-silent-modifications
               (unless (= length 0)
