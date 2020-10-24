@@ -120,3 +120,25 @@ be invoked with no argument in any CRDT shared buffer to access or modify that s
   - overlay-remove ::
     body takes the form =(buffer-name site-id logical-clock)=
 
+* Emacs as a collaborative operating system
+
+The goal: With a few annotations, developer should be able to make any Emacs application 
+collaboration-powered. Emacs should be one of the most powerful collaboration platforms.
+
+How: There're plenty of Emacs applications centered around the buffer and buffer-local-variables.
+By implementing synchronization primitives for all components in a buffer,
+pretty much everything can be made collaborative.
+Synchronize arbitrary buffer-local-variable reasonably is hard, but user annotations can help.
+
+** TODO list
+   - [X] synchronize buffer text (insert/delete)
+   - [X] synchronize overlays
+   - [-] synchronize major/minor modes
+     + [X] initial synchronization of major modes
+     + [ ] toggle minor modes on the fly
+     + [ ] change major modes on the fly
+   - [ ] set of synchronization primitives for buffer local variables
+     + [ ] server dictated
+     + [ ] a library of CRDTs
+   - [ ] synchronize text properties (any use case for this?)
+   - [ ] synchronize markers (any use case for this?)
