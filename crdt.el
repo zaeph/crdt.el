@@ -604,8 +604,7 @@ Otherwise use a dedicated buffer for displaying active users on CRDT-BUFFER."
   "CRDT User List"
   (setq tabulated-list-format [("Display Name" 15 t)
                                ("Focused Buffer" 30 t)
-                               ("Address" 15 t)
-                               ("Port" 7 t)]))
+                               ("Address" 15 t)]))
 
 (defun crdt-list-users (&optional crdt-buffer display-buffer)
   "Display a list of active users working on a CRDT-shared buffer CRDT-BUFFER.
@@ -634,7 +633,7 @@ Otherwise use a dedicated buffer for displaying active users on CRDT-BUFFER."
     (with-current-buffer display-buffer
       (crdt-user-menu-mode)
       (setq tabulated-list-entries nil)
-      (push (list local-id (vector local-name (or (crdt--focused-buffer-name) "--") "*myself*" "--")) tabulated-list-entries)
+      (push (list local-id (vector local-name (or (crdt--focused-buffer-name) "--") "*myself*")) tabulated-list-entries)
       (maphash (lambda (k v)
                  (push (list k (let ((name (crdt--contact-metadata-display-name v))
                                      (host (crdt--contact-metadata-host v))
@@ -647,7 +646,7 @@ Otherwise use a dedicated buffer for displaying active users on CRDT-BUFFER."
                                    (put-text-property (1- (length colored-name)) (length colored-name)
                                                       'face `(:background ,(crdt--get-cursor-color k))
                                                       colored-name)
-                                   (vector colored-name focused-buffer-name host (format "%s" service)))))
+                                   (vector colored-name focused-buffer-name (format "%s:%s" host service)))))
                        tabulated-list-entries))
                table)
       (tabulated-list-init-header)
