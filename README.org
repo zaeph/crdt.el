@@ -28,7 +28,7 @@ If no such exists, it creates a new session with the provided session name,
 and initially contains the current buffer as a shared buffer.
 
 If a new session is to be created, you need to enter port (default to 6530),
-optional password and your display name (default to your current =(USER-FULL-NAME)=).
+optional password and your display name (default to your current =(user-full-name)=).
 
 ** What if I don't have a public IP?
 
