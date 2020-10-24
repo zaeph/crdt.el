@@ -1170,7 +1170,8 @@ to server when WITHOUT is T."
 (cl-defmethod crdt-process-message ((message (head add)) process)
   (dolist (buffer-name (cdr message))
     (unless (gethash buffer-name crdt--buffer-table)
-      (puthash buffer-name nil crdt--buffer-table))))
+      (puthash buffer-name nil crdt--buffer-table))
+    (crdt--refresh-buffers-maybe)))
 
 (cl-defmethod crdt-process-message ((message (head remove)) process)
   (dolist (buffer-name (cdr message))
@@ -1246,7 +1247,8 @@ to server when WITHOUT is T."
       (set-marker (process-mark process) (point))
       (goto-char (point-min))
       (let (message)
-        (while (setq message (ignore-errors (read (current-buffer))))
+        (while (and (ignore-errors (scan-sexps (point) 1))
+                    (setq message (ignore-errors (read (current-buffer)))))
           (when crdt--log-network-traffic
             (print message))
           (cl-macrolet ((body ()
@@ -1323,11 +1325,8 @@ to server when WITHOUT is T."
             (with-silent-modifications
               (crdt--local-insert (point-min) (point-max))))
           (crdt--broadcast-maybe
-           (crdt--format-message `(sync
-                                   ,crdt--buffer-network-name
-                                   ,major-mode
-                                   ,(buffer-substring-no-properties (point-min) (point-max))
-                                   ,@ (crdt--dump-ids (point-min) (point-max) nil)))))
+           (crdt--format-message `(add
+                                   ,crdt--buffer-network-name))))
         (add-hook 'kill-buffer-hook #'crdt-stop-share-buffer nil t)
         (crdt--refresh-buffers-maybe)
         (crdt--refresh-sessions-maybe))
