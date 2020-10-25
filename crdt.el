@@ -937,18 +937,18 @@ into current buffer."
 Verify that CRDT IDs in a document follows ascending order."
   (let* ((pos (point-min))
          (id (crdt--get-starting-id pos)))
-    (cl-block
-        (while t
-          (let* ((next-pos (next-single-property-change pos 'crdt-id))
-                 (next-id (if (< next-pos (point-max))
-                              (crdt--get-starting-id next-pos)
-                            (cl-return)))
-                 (prev-id (substring id)))
-            (crdt--set-id-offset id (+ (- next-pos pos) (crdt--id-offset id)))
-            (unless (string< prev-id next-id)
-              (error "Not monotonic!"))
-            (setq pos next-pos)
-            (setq id next-id))))))
+    (cl-block nil
+      (while t
+        (let* ((next-pos (next-single-property-change pos 'crdt-id))
+               (next-id (if (< next-pos (point-max))
+                            (crdt--get-starting-id next-pos)
+                          (cl-return)))
+               (prev-id (substring id)))
+          (crdt--set-id-offset id (+ (- next-pos pos) (crdt--id-offset id)))
+          (unless (string< prev-id next-id)
+            (error "Not monotonic!"))
+          (setq pos next-pos)
+          (setq id next-id))))))
 
 
 ;;; Network protocol
