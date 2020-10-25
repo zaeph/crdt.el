@@ -1141,19 +1141,21 @@ to server when WITHOUT is T."
     (crdt--refresh-buffers-maybe)))
 
 (cl-defmethod crdt-process-message ((message (head remove)) process)
-  (dolist (buffer-name (cdr message))
-    (let ((buffer (gethash buffer-name (crdt--session-buffer-table crdt--session))))
-      (remhash buffer-name (crdt--session-buffer-table crdt--session))
-      (when buffer
-        (when (buffer-live-p buffer)
-          (with-current-buffer buffer
-            (crdt-mode 0)
-            (setq crdt--session nil))))))
-  (message "Server stopped sharing %s."
-           (mapconcat #'identity (cdr message) ", "))
-  (crdt--broadcast-maybe (crdt--format-message message)
-                         (when process (process-get process 'client-id)))
-  (crdt--refresh-buffers-maybe))
+  (let ((saved-session crdt--session))
+    (dolist (buffer-name (cdr message))
+      (let ((buffer (gethash buffer-name (crdt--session-buffer-table crdt--session))))
+        (remhash buffer-name (crdt--session-buffer-table crdt--session))
+        (when buffer
+          (when (buffer-live-p buffer)
+            (with-current-buffer buffer
+              (crdt-mode 0)
+              (setq crdt--session nil))))))
+   (message "Server stopped sharing %s."
+            (mapconcat #'identity (cdr message) ", "))
+   (let ((crdt--session saved-session))
+     (crdt--broadcast-maybe (crdt--format-message message)
+                            (when process (process-get process 'client-id)))
+     (crdt--refresh-buffers-maybe))))
 
 (cl-defmethod crdt-process-message ((message (head login)) process)
   (cl-destructuring-bind (id session-name) (cdr message)
