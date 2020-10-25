@@ -1382,7 +1382,7 @@ Disconnect if it's a client session, or stop serving if it's a server session."
   (when (if (and crdt-confirm-stop-session
                  (crdt--server-p session)
                  (crdt--session-network-clients session))
-            (yes-or-no-p "There are clients connected to this session, disconnect them and stop the session anyway? ")
+            (yes-or-no-p "There are yet connected clients. Stop session? ")
           t)
     (dolist (client (crdt--session-network-clients session))
       (when (process-live-p client)
