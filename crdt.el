@@ -1108,7 +1108,7 @@ to server when WITHOUT is T."
     (let ((buffer (gethash buffer-name (crdt--session-buffer-table crdt--session))))
       (if (and buffer (buffer-live-p buffer))
           (crdt--sync-buffer-to-client buffer process)
-        (process-send-string process (crdt--format-message `(desync ,buffer-name)))))))
+        (process-send-string process (crdt--format-message `(remove ,buffer-name)))))))
 
 (cl-defmethod crdt-process-message ((message (head sync)) process)
   (unless (crdt--server-p)             ; server shouldn't receive this
