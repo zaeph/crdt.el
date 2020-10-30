@@ -50,10 +50,14 @@
 (defvar crdt--log-network-traffic nil
   "Debug switch to log network traffic to *Messages*.")
 
+(require 'files)
+
+(defvar crdt-tuntox-executable (executable-find "tuntox")
+  "Path to the TunTox binary.")
+
 (require 'cl-lib)
-
 (require 'subr-x)
-
+(require 'url)
 
 ;;; Pseudo cursor/region utils
 (require 'color)
@@ -740,28 +744,29 @@ Start the search from POS."
 The first character of CONTENT has CRDT ID.
 Start the search around POSITION-HINT."
   (let* ((beg (crdt--find-id id position-hint)) end)
-    (goto-char beg)
-    (insert content)
-    (setq end (point))
-    ;; work around for input method overlays
-    (cl-loop for ov in (overlays-at beg)
-          do (unless (overlay-get ov 'crdt-meta)
-               (when (eq (overlay-start ov) beg)
-                 (move-overlay ov end (overlay-end ov)))))
-    (with-silent-modifications
-      (let ((real-end end))
-        (unless (get-text-property end 'crdt-id)
-          (setq end (next-single-property-change end 'crdt-id nil (point-max))))
-        (crdt--with-insertion-information
-         (beg end)
-         (let ((base-length (- (string-bytes starting-id) 2)))
-           (if (and (eq (string-bytes id) (string-bytes starting-id))
-                    (eq t (compare-strings starting-id 0 base-length
-                                           id 0 base-length))
-                    (eq (1+ left-offset) (crdt--id-offset id)))
-               (put-text-property beg real-end 'crdt-id starting-id-pair)
-             (put-text-property beg real-end 'crdt-id (cons id t))))
-         (crdt--split-maybe)))))
+    (save-excursion
+      (goto-char beg)
+      (insert content)
+      (setq end (point))
+      ;; work around for input method overlays
+      (cl-loop for ov in (overlays-at beg)
+            do (unless (overlay-get ov 'crdt-meta)
+                 (when (eq (overlay-start ov) beg)
+                   (move-overlay ov end (overlay-end ov)))))
+      (with-silent-modifications
+        (let ((real-end end))
+          (unless (get-text-property end 'crdt-id)
+            (setq end (next-single-property-change end 'crdt-id nil (point-max))))
+          (crdt--with-insertion-information
+           (beg end)
+           (let ((base-length (- (string-bytes starting-id) 2)))
+             (if (and (eq (string-bytes id) (string-bytes starting-id))
+                      (eq t (compare-strings starting-id 0 base-length
+                                             id 0 base-length))
+                      (eq (1+ left-offset) (crdt--id-offset id)))
+                 (put-text-property beg real-end 'crdt-id starting-id-pair)
+               (put-text-property beg real-end 'crdt-id (cons id t))))
+           (crdt--split-maybe))))))
   ;; (crdt--verify-buffer)
   )
 
@@ -788,27 +793,28 @@ The deletion happens between BEG and END."
   "Handle remote deletion message of ID-ITEMS.
 ID-ITEMS should be a list of CONSes of the form (LENGTH . STARTING-ID).
 Start the search for those ID-ITEMs around POSITION-HINT."
-  (dolist (id-item id-items)
-    (cl-destructuring-bind (length id) id-item
-      (while (> length 0)
-        (goto-char (crdt--find-id id position-hint t))
-        (let* ((end-of-block (next-single-property-change (point) 'crdt-id nil (point-max)))
-               (block-length (- end-of-block (point))))
-          (cl-case (cl-signum (- length block-length))
-            ((1) (delete-char block-length)
-             (cl-decf length block-length)
-             (crdt--set-id-offset id (+ (crdt--id-offset id) block-length)))
-            ((0) (delete-char length)
-             (setq length 0))
-            ((-1)
-             (let* ((starting-id (crdt--get-starting-id (point)))
-                    (eob (crdt--end-of-block-p (point)))
-                    (left-offset (crdt--get-id-offset starting-id (point))))
-               (delete-char length)
-               (crdt--set-id (point) (crdt--id-replace-offset starting-id (+ left-offset length)) eob))
-             (setq length 0)))))
-      ;; (crdt--verify-buffer)
-      )))
+  (save-excursion
+    (dolist (id-item id-items)
+      (cl-destructuring-bind (length id) id-item
+        (while (> length 0)
+          (goto-char (crdt--find-id id position-hint t))
+          (let* ((end-of-block (next-single-property-change (point) 'crdt-id nil (point-max)))
+                 (block-length (- end-of-block (point))))
+            (cl-case (cl-signum (- length block-length))
+              ((1) (delete-char block-length)
+               (cl-decf length block-length)
+               (crdt--set-id-offset id (+ (crdt--id-offset id) block-length)))
+              ((0) (delete-char length)
+               (setq length 0))
+              ((-1)
+               (let* ((starting-id (crdt--get-starting-id (point)))
+                      (eob (crdt--end-of-block-p (point)))
+                      (left-offset (crdt--get-id-offset starting-id (point))))
+                 (delete-char length)
+                 (crdt--set-id (point) (crdt--id-replace-offset starting-id (+ left-offset length)) eob))
+               (setq length 0)))))
+        ;; (crdt--verify-buffer)
+        ))))
 
 (defun crdt--before-change (beg end)
   "Before change hook used by CRDT-MODE.
@@ -1489,43 +1495,54 @@ If SESSION-NAME is nil, disconnect from the current session."
                    crdt--session)))
     (crdt--stop-session session)))
 
-(defvar crdt-connect-address-history nil)
+(defvar crdt-connect-url-history nil)
 
-(defun crdt-connect (address port &optional display-name)
-  "Connect to a CRDT server running at ADDRESS:PORT.
+(defun crdt-connect (url &optional display-name)
+  "Connect to a CRDT server running at URL.
 Open a new buffer to display the shared content.
 Join with DISPLAY-NAME."
   (interactive
-   (list (let ((address
-                (read-from-minibuffer "Address: " nil nil nil 'crdt-connect-address-history)))
-           (when (eq (length address) 0)
-             (error "Please input a valid address"))
-           address)
-         (let ((port (read-from-minibuffer "Port (default 6530): " nil nil t nil "6530")))
-           (when (not (numberp port))
-             (error "Port must be a number"))
-           port)))
-  (let* ((network-process (make-network-process
-                           :name "CRDT Client"
-                           :buffer (generate-new-buffer "*crdt-client*")
-                           :host address
-                           :family 'ipv4
-                           :service port
-                           :filter #'crdt--network-filter
-                           :sentinel #'crdt--client-process-sentinel))
-         (new-session
-          (crdt--make-session :local-clock 0
-                              :local-name (or display-name (crdt--read-name))
-                              :contact-table (make-hash-table :test 'equal)
-                              :buffer-table (make-hash-table :test 'equal)
-                              :name (format "%s:%s" address port)
-                              :network-process network-process)))
-    (process-put network-process 'crdt-session new-session)
-    (push new-session crdt--session-list)
-    (process-send-string network-process
-                         (crdt--format-message `(hello ,(crdt--session-local-name new-session))))
-    (let ((crdt--session new-session))
-      (crdt-list-buffers))))
+   (list
+    (let (parsed-url
+          (url (read-from-minibuffer "URL: " nil nil nil 'crdt-connect-url-history)))
+      (when (eq (length url) 0)
+        (error "Please input a valid URL"))
+      (setq parsed-url (url-generic-parse-url url))
+      (unless (url-type parsed-url)
+        (setq parsed-url (url-generic-parse-url (concat "tcp://" url))))
+      (when (and (not (url-portspec parsed-url)) (member (url-type parsed-url) '("tcp")))
+        (let ((port (read-from-minibuffer "Port (default 6530): " nil nil t nil "6530")))
+          (when (not (numberp port))
+            (error "Port must be a number"))
+          (setf (url-portspec parsed-url) port)))
+      parsed-url)))
+  (let ((url-type (url-type url))
+        address port)
+    (cond ((equal url-type "tcp")
+           (setq address (url-host url))
+           (setq port (url-portspec url)))
+          (t (error "Unknown protocol \"%s\"" url-type)))
+    (let* ((network-process (make-network-process
+                             :name "CRDT Client"
+                             :buffer (generate-new-buffer "*crdt-client*")
+                             :host address
+                             :family 'ipv4
+                             :service port
+                             :filter #'crdt--network-filter
+                             :sentinel #'crdt--client-process-sentinel))
+           (new-session
+            (crdt--make-session :local-clock 0
+                                :local-name (or display-name (crdt--read-name))
+                                :contact-table (make-hash-table :test 'equal)
+                                :buffer-table (make-hash-table :test 'equal)
+                                :name (format "%s:%s" address port)
+                                :network-process network-process)))
+      (process-put network-process 'crdt-session new-session)
+      (push new-session crdt--session-list)
+      (process-send-string network-process
+                           (crdt--format-message `(hello ,(crdt--session-local-name new-session))))
+      (let ((crdt--session new-session))
+        (crdt-list-buffers)))))
 
 ;;; overlay tracking
 (defvar crdt--inhibit-overlay-advices nil)
