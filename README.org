@@ -30,9 +30,25 @@ and initially contains the current buffer as a shared buffer.
 If a new session is to be created, you need to enter port (default to 6530),
 optional password and your display name (default to your current =(user-full-name)=).
 
-** What if I don't have a public IP?
+** Join a session
+
+=M-x crdt-connect=, then enter address, port, and your display name.
+
+** What if we don't have a public IP?
 
 There're various workaround.
+
+- You can use [[https://gitlab.com/gjedeer/tuntox][tuntox]] to proxy your connection over the [[tox.chat][Tox]] protocol.
+  =crdt.el= has experimental built-in integration for =tuntox=.
+  To enable it, you need to install =tuntox=,
+  set up the custom variable =crdt-tuntox-executable= accordingly (the path to your =tuntox= binary),
+  and set the custom variable =crdt-use-tuntox=. 
+  Setting it to =t= make =crdt.el= always create =tuntox= proxy for new server sessions, 
+  and setting it to ='confirm= make =crdt.el= ask you every time when creating new sessions.
+  After starting a session with =tuntox= proxy,
+  you can =M-x crdt-copy-url= to copy a URL recognizable by =M-x crdt-connect= and share it to your friends.
+  Be aware that according to my experience, =tuntox= takes significant time to establish a connection (sometimes up to half a minute),
+  however it gets much faster after the connection is established.
 
 - You can use Teredo to get a public routable IPv6 address. 
   One free software implementation is Miredo. Get it from your
@@ -61,10 +77,6 @@ $ ssh -R EXAMPLE.COM:6530:127.0.0.1:6530 EXAMPLE.COM
 GatewayPorts yes
   #+END_SRC
   
-** Join a session
-
-=M-x crdt-connect=, then enter address, port, and your display name.
-
 ** List active users
 
 In a CRDT shared buffer (either server or client), =M-x crdt-list-users=.

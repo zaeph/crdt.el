@@ -24,6 +24,7 @@
 ;; This package provides a collaborative editing environment for Emacs.
 
 ;;; Code:
+
 ;;; Customs
 
 (defgroup crdt nil
@@ -52,14 +53,24 @@
 
 (require 'files)
 
-(defvar crdt-tuntox-executable (executable-find "tuntox")
-  "Path to the TunTox binary.")
+(defcustom crdt-tuntox-executable (executable-find "tuntox")
+  "Path to the tuntox binary."
+  :type 'file)
+
+(defcustom crdt-tuntox-key-path (expand-file-name "~")
+  "Path to save tuntox's private key."
+  :type 'directory)
+
+(defcustom crdt-use-tuntox nil
+  "Start tuntox proxy for CRDT servers."
+  :type '(choice boolean (const confirm)))
 
 (require 'cl-lib)
 (require 'subr-x)
 (require 'url)
 
 ;;; Pseudo cursor/region utils
+
 (require 'color)
 
 (defvar crdt-cursor-region-colors
@@ -199,8 +210,8 @@ Assume the stored literal ID is STARTING-ID."
   (let* ((start-pos (previous-single-property-change (1+ pos) 'crdt-id obj (or limit (point-min)))))
     (+ (- pos start-pos) (crdt--id-offset starting-id))))
 
-
 ;;; CRDT ID and text property utils
+
 (defsubst crdt--get-id (pos &optional obj left-limit right-limit)
   "Get the real CRDT ID at POS in OBJ.
 The search for start and end of CRDT ID block is limited by LEFT-LIMIT and RIGHT-LIMIT."
@@ -250,8 +261,8 @@ Must be used inside CRDT--WITH-INSERTION-INFORMATION."
     (rplacd (get-text-property left-pos 'crdt-id beg-obj) nil) ;; clear end-of-block flag
     t))
 
-
 ;;; Buffer local variables
+
 (defmacro crdt--defvar-permanent-local (name &optional initial-value docstring)
   "Define a permanent local variable with NAME with INITIAL-VALUE and DOCSTRING."
   `(progn
@@ -315,17 +326,20 @@ to avoid recusive calling of CRDT synchronization functions.")
 
 (crdt--defvar-permanent-local crdt--buffer-sync-callback)
 
+;;; Global variables
+
 (defvar crdt--session-list nil)
 
 (defvar crdt--session-menu-buffer nil)
 
-
 ;;; crdt-mode
+
 (defun crdt--install-hooks ()
   "Install the hooks used by CRDT-MODE."
   (add-hook 'after-change-functions #'crdt--after-change nil t)
   (add-hook 'before-change-functions #'crdt--before-change nil t)
   (add-hook 'post-command-hook #'crdt--post-command nil t)
+  (add-hook 'deactivate-mark-hook #'crdt--post-command nil t)
   (add-hook 'kill-buffer-hook #'crdt--kill-buffer-hook nil t))
 
 (defun crdt--uninstall-hooks ()
@@ -333,6 +347,7 @@ to avoid recusive calling of CRDT synchronization functions.")
   (remove-hook 'after-change-functions #'crdt--after-change t)
   (remove-hook 'before-change-functions #'crdt--before-change t)
   (remove-hook 'post-command-hook #'crdt--post-command t)
+  (remove-hook 'deactivate-mark-hook #'crdt--post-command t)
   (remove-hook 'kill-buffer-hook #'crdt--kill-buffer-hook t))
 
 (defsubst crdt--clear-pseudo-cursor-table ()
@@ -356,8 +371,8 @@ Also set CRDT--PSEUDO-CURSOR-TABLE to NIL."
       (crdt--clear-pseudo-cursor-table)
       (setq crdt--overlay-table nil)))
 
-
 ;;; Shared buffer utils
+
 (defsubst crdt--server-p (&optional session)
   "Tell if SESSION is running as a server.
 If SESSION is nil, use current CRDT--SESSION."
@@ -403,6 +418,7 @@ after synchronization is completed."
                      ,@body))))))))
 
 ;;; Session menu
+
 (defun crdt--session-menu-goto ()
   "Open the buffer menu for the session under point in CRDT session menu."
   (interactive)
@@ -470,8 +486,8 @@ If DISPLAY-BUFFER is provided, display the output there."
   (when (and crdt--session-menu-buffer (buffer-live-p crdt--session-menu-buffer))
     (crdt-refresh-sessions crdt--session-menu-buffer)))
 
-
 ;;; Buffer menu
+
 (defun crdt--buffer-menu-goto ()
   "Open the buffer under point in CRDT buffer menu."
   (interactive)
@@ -552,6 +568,7 @@ Otherwise use a dedicated buffer for displaying active users on CRDT-BUFFER."
   (crdt--refresh-sessions-maybe))
 
 ;;; User menu
+
 (defun crdt--user-menu-goto ()
   "Goto the cursor location of the user under point in CRDT user menu."
   (interactive)
@@ -646,8 +663,8 @@ It informs other peers that the buffer is killed."
       (setf (crdt--session-focused-buffer-name crdt--session) nil))
     (crdt--refresh-users-maybe)))
 
-
 ;;; CRDT insert/delete
+
 (defsubst crdt--base64-encode-maybe (str)
   "Base64 encode STR if it's a string, or return NIL if STR is NIL."
   (when str (base64-encode-string str)))
@@ -872,6 +889,7 @@ and send message to other peers if needed."
                    (crdt--format-message message)))))))))))
 
 ;;; CRDT point/mark synchronization
+
 (defsubst crdt--id-to-pos (id hint)
   "Convert CRDT-ID ID to a position in current buffer with best effort.
 Start the search around HINT."
@@ -946,6 +964,7 @@ Send message to other peers about any changes."
 
 
 ;;; CRDT ID (de)serialization
+
 (defun crdt--dump-ids (beg end object &optional omit-end-of-block-p include-content)
   "Serialize all CRDT IDs in OBJECT from BEG to END into a list.
 The list contains CONSes of the form (LENGTH CRDT-ID-BASE64 END-OF-BLOCK-P),
@@ -997,8 +1016,8 @@ Verify that CRDT IDs in a document follows ascending order."
           (setq pos next-pos)
           (setq id next-id))))))
 
-
 ;;; Network protocol
+
 (defun crdt--format-message (args)
   "Serialize ARGS (which should be a list) into a string.
 Return the string."
@@ -1179,12 +1198,12 @@ The network process for the client connection is PROCESS."
        buffer-name
        (let ((crdt--inhibit-update t))
          (erase-buffer)
+         (crdt--load-ids ids)
          (if (fboundp mode)
              (unless (eq major-mode mode)
                (funcall mode)            ; trust your server...
                (crdt-mode))
-           (message "Server uses %s, but not available locally." mode))
-         (crdt--load-ids ids))))
+           (message "Server uses %s, but not available locally." mode)))))
     (crdt--refresh-buffers-maybe)))
 
 (cl-defmethod crdt-process-message ((message (head ready)) _process)
@@ -1229,6 +1248,9 @@ The network process for the client connection is PROCESS."
     (setf (crdt--session-local-id crdt--session) id)
     (crdt--refresh-sessions-maybe)))
 
+(cl-defmethod crdt-process-message ((_message (head leave)) process)
+  (delete-process process))
+
 (cl-defmethod crdt-process-message ((message (head challenge)) _process)
   (unless (crdt--server-p)             ; server shouldn't receive this
     (message nil)
@@ -1266,6 +1288,8 @@ The network process for the client connection is PROCESS."
   (crdt--broadcast-maybe (crdt--format-message message) (process-get process 'client-id)))
 
 (defun crdt--network-filter (process string)
+  "Network filter function for CRDT network processes.
+Handle received STRING from PROCESS."
   (unless (and (process-buffer process)
                (buffer-live-p (process-buffer process)))
     (set-process-buffer process (generate-new-buffer "*crdt-server*"))
@@ -1331,17 +1355,26 @@ The network process for the client connection is PROCESS."
 
 (defun crdt--client-process-sentinel (process _message)
   (unless (eq (process-status process) 'open)
+    (when (process-get process 'tuntox-process)
+      (process-send-string process (crdt--format-message '(leave))))
     (crdt--stop-session (process-get process 'crdt-session))))
 
-
 ;;; UI commands
-(defun crdt--read-name ()
+
+(defun crdt--read-name (&optional session-name)
+  "Read display name from minibuffer or use the default display name.
+The behavior is controlled by CRDT-ASK-FOR-NAME.
+SESSION-NAME if provided is used in the prompt."
   (if crdt-ask-for-name
-      (let ((input (read-from-minibuffer (format "Display name (default %S): " crdt-default-name))))
+      (let ((input (read-from-minibuffer
+                    (format "Display name%s (default %S): "
+                            (if session-name (concat " for " session-name) "")
+                            crdt-default-name))))
         (if (> (length input) 0) input crdt-default-name))
     crdt-default-name))
 
 (defun crdt--share-buffer (buffer session)
+  "Add BUFFER to CRDT SESSION."
   (if (process-contact (crdt--session-network-process session) :server)
       (with-current-buffer buffer
         (setq crdt--session session)
@@ -1362,6 +1395,9 @@ The network process for the client connection is PROCESS."
     (error "Only server can add new buffer")))
 
 (defsubst crdt--get-session-names (server)
+  "Get session names for CRDT sessions (as in CRDT--SESSION-LIST).
+If SERVER is non-NIL, return the list of names for server sessions.
+Otherwise, return the list of names for client sessions."
   (let (session-names)
     (dolist (session crdt--session-list)
       (when (eq (crdt--server-p session) server)
@@ -1369,6 +1405,7 @@ The network process for the client connection is PROCESS."
     (nreverse session-names)))
 
 (defsubst crdt--get-session (name)
+  "Get the CRDT session object with NAME."
   (cl-find name crdt--session-list
            :test 'equal :key #'crdt--session-name))
 
@@ -1428,15 +1465,32 @@ Setup up the server with PASSWORD and assign this Emacs DISPLAY-NAME."
                               :contact-table (make-hash-table :test 'equal)
                               :buffer-table (make-hash-table :test 'equal)
                               :name session-name
-                              :network-process network-process)))
+                              :network-process network-process))
+         (tuntox-p (or (eq crdt-use-tuntox t)
+                       (and (eq crdt-use-tuntox 'confirm)
+                            (yes-or-no-p "Start a tuntox proxy for this session? ")))))
     (process-put network-process 'crdt-session new-session)
+    (push new-session crdt--session-list)
     (unless password
       (setq password
             (when crdt-ask-for-password
               (read-from-minibuffer "Set password (empty for no authentication): "))))
-    (when (and password (> (length password) 0))
-      (process-put network-process 'password password))
-    (push new-session crdt--session-list)
+    (if tuntox-p
+        (let ((proxy-process
+               (make-process :name "Tuntox Proxy"
+                             :buffer (generate-new-buffer "*Tuntox Proxy*")
+                             :command
+                             `(,crdt-tuntox-executable
+                               "-C" ,crdt-tuntox-key-path
+                               "-f" "/dev/stdin" ; do the filtering for safety sake
+                               ,@ (when (and password (> (length password) 0))
+                                    `("-s" ,password))))))
+          (process-put network-process 'tuntox-process proxy-process)
+          (process-send-string proxy-process (format "127.0.0.1:%s\n" port)) ; only allow connection to our port
+          (process-send-eof proxy-process)
+          (switch-to-buffer-other-window (process-buffer proxy-process)))
+      (when (and password (> (length password) 0))
+        (process-put network-process 'password password)))
     new-session))
 
 (defun crdt--stop-session (session)
@@ -1466,6 +1520,9 @@ Disconnect if it's a client session, or stop serving if it's a server session."
     (setq crdt--session-list
           (delq session crdt--session-list))
     (crdt--refresh-sessions-maybe)
+    (let ((proxy-process (process-get (crdt--session-network-process session) 'tuntox-process)))
+      (when (and proxy-process (process-live-p proxy-process))
+        (interrupt-process proxy-process)))
     (delete-process (crdt--session-network-process session))
     (message "Disconnected.")))
 
@@ -1481,6 +1538,33 @@ If SESSION-NAME is nil, stop sharing the current session."
                      (crdt--get-session session-name)
                    crdt--session)))
     (crdt--stop-session session)))
+
+(defun crdt-copy-url (&optional session-name)
+  "Copy the url for the session with SESSION-NAME.
+Currently this only work if a tuntox proxy is used."
+  (interactive
+   (list (completing-read "Choose a server session: "
+                          (crdt--get-session-names t) nil t
+                          (when (and crdt--session (crdt--server-p))
+                            (crdt--session-name crdt--session)))))
+  (let* ((session (if session-name
+                     (crdt--get-session session-name)
+                    crdt--session))
+         (network-process (crdt--session-network-process session))
+         (tuntox-process (process-get network-process 'tuntox-process)))
+    (if tuntox-process
+        (progn
+          (kill-new (format "tuntox://%s:%s"
+                            (with-current-buffer (process-buffer tuntox-process)
+                              (save-excursion
+                                (goto-char (point-min))
+                                (search-forward "Using Tox ID: ")
+                                (let ((start (point)))
+                                  (end-of-line)
+                                  (buffer-substring-no-properties start (point)))))
+                            (process-contact network-process :service)))
+          (message "URL copied."))
+      (message "No known URL to copy, find out your public IP address yourself!"))))
 
 (defun crdt-disconnect (&optional session-name)
   "Disconnect from the session with SESSION-NAME.
@@ -1510,41 +1594,77 @@ Join with DISPLAY-NAME."
       (setq parsed-url (url-generic-parse-url url))
       (unless (url-type parsed-url)
         (setq parsed-url (url-generic-parse-url (concat "tcp://" url))))
-      (when (and (not (url-portspec parsed-url)) (member (url-type parsed-url) '("tcp")))
-        (let ((port (read-from-minibuffer "Port (default 6530): " nil nil t nil "6530")))
+      (when (and (not (url-portspec parsed-url)) (member (url-type parsed-url) '("tcp" "tuntox")))
+        (let ((port (read-from-minibuffer "Server port (default 6530): " nil nil t nil "6530")))
           (when (not (numberp port))
             (error "Port must be a number"))
           (setf (url-portspec parsed-url) port)))
       parsed-url)))
   (let ((url-type (url-type url))
         address port)
-    (cond ((equal url-type "tcp")
-           (setq address (url-host url))
-           (setq port (url-portspec url)))
-          (t (error "Unknown protocol \"%s\"" url-type)))
-    (let* ((network-process (make-network-process
-                             :name "CRDT Client"
-                             :buffer (generate-new-buffer "*crdt-client*")
-                             :host address
-                             :family 'ipv4
-                             :service port
-                             :filter #'crdt--network-filter
-                             :sentinel #'crdt--client-process-sentinel))
-           (new-session
-            (crdt--make-session :local-clock 0
-                                :local-name (or display-name (crdt--read-name))
-                                :contact-table (make-hash-table :test 'equal)
-                                :buffer-table (make-hash-table :test 'equal)
-                                :name (format "%s:%s" address port)
-                                :network-process network-process)))
-      (process-put network-process 'crdt-session new-session)
-      (push new-session crdt--session-list)
-      (process-send-string network-process
-                           (crdt--format-message `(hello ,(crdt--session-local-name new-session))))
-      (let ((crdt--session new-session))
-        (crdt-list-buffers)))))
+    (cl-macrolet ((start-session (&body body)
+                    `(let* ((network-process (make-network-process
+                                              :name "CRDT Client"
+                                              :buffer (generate-new-buffer "*crdt-client*")
+                                              :host address
+                                              :family 'ipv4
+                                              :service port
+                                              :filter #'crdt--network-filter
+                                              :sentinel #'crdt--client-process-sentinel))
+                            (name-placeholder (format "%s:%s" address port))
+                            (new-session
+                             (crdt--make-session :local-clock 0
+                                                 :local-name (or display-name (crdt--read-name name-placeholder))
+                                                 :contact-table (make-hash-table :test 'equal)
+                                                 :buffer-table (make-hash-table :test 'equal)
+                                                 :name name-placeholder
+                                                 :network-process network-process)))
+                      (process-put network-process 'crdt-session new-session)
+                      (push new-session crdt--session-list)
+                      ,@body
+                      (process-send-string network-process
+                       (crdt--format-message `(hello ,(crdt--session-local-name new-session))))
+                      (let ((crdt--session new-session))
+                        (crdt-list-buffers)))))
+      (cond ((equal url-type "tcp")
+             (setq address (url-host url))
+             (setq port (url-portspec url))
+             (start-session))
+            ((equal url-type "tuntox")
+             (setq address "127.0.0.1")
+             (setq port (read-from-minibuffer (format "tuntox proxy port (default %s): " (1+ (url-portspec url)))
+                                              nil nil t nil (format "%s" (1+ (url-portspec url)))))
+             (let ((password (read-passwd "tuntox password (empty for no password): ")))
+               (switch-to-buffer-other-window
+                (process-buffer
+                 (make-process
+                  :name "Tuntox Proxy"
+                  :buffer (generate-new-buffer "*Tuntox Proxy*")
+                  :command
+                  `(,crdt-tuntox-executable
+                    "-i" ,(url-host url)
+                    "-L" ,(format "%s:127.0.0.1:%s" port (url-portspec url))
+                    ,@ (when (> (length password) 0)
+                         `("-s" ,password)))
+                  :filter
+                  (let (initialized)
+                    (lambda (proc string)
+                      (when (buffer-live-p (process-buffer proc))
+                        (with-current-buffer (process-buffer proc)
+                          (let ((moving (= (point) (process-mark proc))))
+                            (save-excursion
+                              (goto-char (process-mark proc))
+                              (insert string)
+                              (set-marker (process-mark proc) (point))
+                              (unless initialized
+                                (when (ignore-errors (search-backward "Friend request accepted"))
+                                  (setq initialized t)
+                                  (start-session (process-put network-process 'tuntox-process proc)))))
+                            (if moving (goto-char (process-mark proc)))))))))))))
+            (t (error "Unknown protocol \"%s\"" url-type))))))
 
 ;;; overlay tracking
+
 (defvar crdt--inhibit-overlay-advices nil)
 
 (defvar crdt--modifying-overlay-metadata nil)
@@ -1714,8 +1834,8 @@ Join with DISPLAY-NAME."
 
 (advice-add 'overlay-put :around #'crdt--overlay-put-advice)
 
-
 ;;; Org integration
+
 (define-minor-mode crdt-org-sync-overlay-mode ""
   nil " Sync Org Overlay" nil
   (if crdt-org-sync-overlay-mode
@@ -1738,7 +1858,6 @@ Join with DISPLAY-NAME."
 
 (cl-loop for command in '(org-cycle org-shifttab)
       do (advice-add command :around #'crdt--org-overlay-advice))
-
 
 (provide 'crdt)
 ;;; crdt.el ends here
