@@ -84,7 +84,7 @@ and second last two bytes represent site ID.
     body takes the form =buffer-name-list=
 
   - get ::
-    (TODO) Request the server to resend =sync= message for a buffer.
+    Request the server to resend =sync= message for a buffer.
     body takes the form =(buffer-name)=
 
   - overlay-add ::

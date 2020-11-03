@@ -38,7 +38,7 @@ optional password and your display name (default to your current =(user-full-nam
 
 There're various workaround.
 
-- You can use [[https://gitlab.com/gjedeer/tuntox][tuntox]] to proxy your connection over the [[tox.chat][Tox]] protocol.
+- You can use [[https://gitlab.com/gjedeer/tuntox][tuntox]] to proxy your connection over the [[https://tox.chat][Tox]] protocol.
   =crdt.el= has experimental built-in integration for =tuntox=.
   To enable it, you need to install =tuntox=,
   set up the custom variable =crdt-tuntox-executable= accordingly (the path to your =tuntox= binary),
