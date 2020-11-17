@@ -70,10 +70,16 @@ and second last two bytes represent site ID.
     Might be used for error recovery or other optimization in the future.
     One optimization I have in mind is let server try to merge all CRDT item into a single
     one and try to synchronize this state to clients at best effort.
-    body takes the form =(buffer-name major-mode . crdt-id-list)=
-    - =major-mode= is the major mode used at the server site
-    - =content= is the string in the buffer
+    body takes the form =(buffer-name . crdt-id-list)=
     - =crdt-id-list= is generated from =CRDT--DUMP-IDS=
+
+  - ready ::
+    body takes the form =(buffer-name major-mode-symbol)=
+    Indicates the end of a batch of synchronization messages
+    (which usually contains some =cursor= messages, a =sync= message,
+    and some =overlay-*= messages).
+    The client should now try to enable =major-mode-symbol= in the
+    synchronized buffer.
 
   - add ::
     Indicates that the server has started sharing some buffers.

@@ -1071,7 +1071,6 @@ The network process for the client connection is PROCESS."
   (with-current-buffer buffer
     (process-send-string process (crdt--format-message `(sync
                                                          ,crdt--buffer-network-name
-                                                         ,major-mode
                                                          ,@ (crdt--dump-ids (point-min) (point-max) nil nil t))))
     ;; synchronize cursor
     (maphash (lambda (site-id ov-pair)
@@ -1110,7 +1109,7 @@ The network process for the client connection is PROCESS."
                                                                ,(car k) ,(cdr k) ,prop ,value))))))
              crdt--overlay-table)
 
-    (process-send-string process (crdt--format-message `(ready ,crdt--buffer-network-name)))))
+    (process-send-string process (crdt--format-message `(ready ,crdt--buffer-network-name ,major-mode)))))
 
 (defun crdt--greet-client (process)
   "Send initial information when a client connects.
@@ -1193,24 +1192,33 @@ The network process for the client connection is PROCESS."
 
 (cl-defmethod crdt-process-message ((message (head sync)) _process)
   (unless (crdt--server-p)             ; server shouldn't receive this
-    (cl-destructuring-bind (buffer-name mode . ids) (cdr message)
+    (cl-destructuring-bind (buffer-name . ids) (cdr message)
       (crdt--with-buffer-name
        buffer-name
        (let ((crdt--inhibit-update t))
+         (unless crdt--buffer-sync-callback
+           ;; try to get to the same position after sync,
+           ;; if crdt--buffer-sync-callback is not set yet
+           (let ((pos (point)))
+             (setq crdt--buffer-sync-callback
+                   (lambda ()
+                     (goto-char
+                      (max (min pos (point-max))
+                           (point-max)))))))
          (erase-buffer)
-         (crdt--load-ids ids)
-         (if (fboundp mode)
-             (unless (eq major-mode mode)
-               (funcall mode)            ; trust your server...
-               (crdt-mode))
-           (message "Server uses %s, but not available locally." mode)))))
+         (crdt--load-ids ids))))
     (crdt--refresh-buffers-maybe)))
 
 (cl-defmethod crdt-process-message ((message (head ready)) _process)
   (unless (crdt--server-p)             ; server shouldn't receive this
-    (cl-destructuring-bind (buffer-name) (cdr message)
+    (cl-destructuring-bind (buffer-name mode) (cdr message)
       (crdt--with-buffer-name
        buffer-name
+       (if (fboundp mode)
+           (unless (eq major-mode mode)
+             (funcall mode)            ; trust your server...
+             (crdt-mode))
+         (message "Server uses %s, but not available locally." mode))
        (when crdt--buffer-sync-callback
          (funcall crdt--buffer-sync-callback)
          (setq crdt--buffer-sync-callback nil))))))
