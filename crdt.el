@@ -1923,10 +1923,20 @@ Join with DISPLAY-NAME."
              crdt--buffer-pseudo-process
            (funcall orig-func buffer)))))
 
+(defun crdt--get-process-advice (orig-func name)
+  (if (crdt--pseudo-process-p name)
+      name
+    (funcall orig-func name)))
+
 (defun crdt--process-mark-advice (orig-func process)
   (if (crdt--pseudo-process-p process)
       (crdt--pseudo-process-mark process)
     (funcall orig-func process)))
+
+(defun crdt--process-name-advice (orig-func process)
+  (if (crdt--pseudo-process-p process)
+      process
+      (funcall orig-func process)))
 
 (cl-defmethod crdt-process-message ((message (head process-mark)) process)
   (cl-destructuring-bind (buffer-name crdt-id position-hint) (cdr message)
@@ -1973,14 +1983,32 @@ Join with DISPLAY-NAME."
 (defun crdt--processp-advice (orig-func object)
   (or (crdt--pseudo-process-p object) (funcall orig-func object)))
 
+(defun crdt--dummy () nil)
+
+(defun crdt--process-sentinel/filter-advice (orig-func process)
+  (if (crdt--pseudo-process-p process)
+      #'crdt--dummy
+    (funcall orig-func process)))
+
+(defun crdt--set-process-sentinel/filter-advice (orig-func process func)
+  (if (crdt--pseudo-process-p process)
+      nil
+      (funcall orig-func process func)))
+
 (advice-add 'process-send-string :around #'crdt--process-send-string-advice)
 (advice-add 'process-send-region :around #'crdt--process-send-region-advice)
 (advice-add 'processp :around #'crdt--processp-advice)
 (advice-add 'get-buffer-process :around #'crdt--get-buffer-process-advice)
+(advice-add 'get-process :around #'crdt--get-process-advice)
 (advice-add 'process-status :around #'crdt--process-status-advice)
 (advice-add 'process-buffer :around #'crdt--process-buffer-advice)
 (advice-add 'process-mark :around #'crdt--process-mark-advice)
 (advice-add 'delete-process :around #'crdt--delete-process-advice)
+(advice-add 'process-name :around #'crdt--process-name-advice)
+(advice-add 'process-sentinel :around #'crdt--process-sentinel/filter-advice)
+(advice-add 'process-filter :around #'crdt--process-sentinel/filter-advice)
+(advice-add 'set-process-sentinel :around #'crdt--set-process-sentinel/filter-advice)
+(advice-add 'set-process-filter :around #'crdt--set-process-sentinel/filter-advice)
 
 (cl-defmethod crdt-process-message ((message (head process)) process)
   (cl-destructuring-bind (buffer-name string) (cdr message)
