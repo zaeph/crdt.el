@@ -1301,7 +1301,8 @@ Handle received STRING from PROCESS."
   (unless (and (process-buffer process)
                (buffer-live-p (process-buffer process)))
     (set-process-buffer process (generate-new-buffer "*crdt-server*"))
-    (set-marker (process-mark process) 1))
+    (with-current-buffer (process-buffer process)
+      (set-marker (process-mark process) 1)))
   (with-current-buffer (process-buffer process)
     (unless crdt--session
       (setq crdt--session (process-get process 'crdt-session)))
