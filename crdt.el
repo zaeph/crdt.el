@@ -326,6 +326,8 @@ to avoid recusive calling of CRDT synchronization functions.")
 
 (crdt--defvar-permanent-local crdt--buffer-sync-callback)
 
+(crdt--defvar-permanent-local crdt--buffer-pseudo-process)
+
 ;;; Global variables
 
 (defvar crdt--session-list nil)
@@ -1867,6 +1869,60 @@ Join with DISPLAY-NAME."
 
 (cl-loop for command in '(org-cycle org-shifttab)
       do (advice-add command :around #'crdt--org-overlay-advice))
+
+;;; pseudo process
+(cl-defstruct (crdt--pseudo-process (:constructor crdt--make-pseudo-process))
+  buffer)
+
+(defun crdt--pseudo-process-send-string (pseudo-process string)
+  (with-current-buffer (crdt--pseudo-process-buffer pseudo-process)
+    (crdt--broadcast-maybe (crdt--format-message
+                            `(process ,crdt--buffer-network-name ,string)))))
+
+(defun crdt--process-send-string-advice (orig-func process string)
+  (if (crdt--pseudo-process-p process)
+      (crdt--pseudo-process-send-string process string)
+    (funcall orig-func process string)))
+
+(defun crdt--process-send-region-advice (orig-func process start end)
+  (if (crdt--pseudo-process-p process)
+      (crdt--pseudo-process-send-string process (buffer-substring-no-properties start end))
+    (funcall orig-func process start end)))
+
+(defun crdt--get-buffer-process-advice (orig-func buffer)
+  (and (setq buffer (get-buffer buffer))
+       (with-current-buffer buffer
+         (if (and crdt--session (not (crdt--server-p)))
+             (or crdt--buffer-pseudo-process
+                 (setq crdt--buffer-pseudo-process
+                       (crdt--make-pseudo-process :buffer buffer)))
+           (funcall orig-func buffer)))))
+
+(defun crdt--process-status-advice (orig-func process)
+  (if (crdt--pseudo-process-p process)
+      'run
+    (funcall orig-func process)))
+
+(defun crdt--process-buffer-advice (orig-func process)
+  (if (crdt--pseudo-process-p process)
+      (crdt--pseudo-process-buffer process)
+    (funcall orig-func process)))
+
+(defun crdt--processp-advice (orig-func object)
+  (or (crdt--pseudo-process-p object) (funcall orig-func object)))
+
+(advice-add 'process-send-string :around #'crdt--process-send-string-advice)
+(advice-add 'process-send-region :around #'crdt--process-send-region-advice)
+(advice-add 'processp :around #'crdt--processp-advice)
+(advice-add 'get-buffer-process :around #'crdt--get-buffer-process-advice)
+(advice-add 'process-status :around #'crdt--process-status-advice)
+(advice-add 'process-buffer :around #'crdt--process-buffer-advice)
+
+(cl-defmethod crdt-process-message ((message (head process)) process)
+  (cl-destructuring-bind (buffer-name string) (cdr message)
+    (crdt--with-buffer-name
+     buffer-name
+     (process-send-string (get-buffer-process (current-buffer)) string))))
 
 (provide 'crdt)
 ;;; crdt.el ends here

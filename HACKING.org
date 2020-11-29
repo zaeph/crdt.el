@@ -115,6 +115,11 @@ and second last two bytes represent site ID.
 
   - overlay-remove ::
     body takes the form =(buffer-name site-id logical-clock)=
+  
+  - process ::
+    body takes the form =(buffer-name string)=
+    Sent from client to server, request sending =string= 
+    to the process buffer associated to =buffer-name=.
 
 * Emacs as a collaborative operating system
 
