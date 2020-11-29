@@ -21,105 +21,116 @@ and second last two bytes represent site ID.
 
   Every message takes the form =(type . body)=
 
-  type can be: insert delete cursor hello challenge sync desync overlay-(add,move,put,remove)
+  - Text Editing
+    + insert ::
+      body takes the form =(buffer-name crdt-id position-hint content)=
+      - =position-hint= is the buffer position where the operation happens at the site
+        which generates the operation.  Then we can play the trick that start search
+        near this position at other sites to speedup CRDT ID search
+      - =content= is the string to be inserted
 
-  - insert ::
-    body takes the form =(buffer-name crdt-id position-hint content)=
-    - =position-hint= is the buffer position where the operation happens at the site
-      which generates the operation.  Then we can play the trick that start search
-      near this position at other sites to speedup CRDT ID search
-    - =content= is the string to be inserted
+    + delete ::
+      body takes the form =(buffer-name position-hint (crdt-id . length)*)=
 
-  - delete ::
-    body takes the form =(buffer-name position-hint (crdt-id . length)*)=
+  - Peer State
+    + cursor ::
+      body takes the form
+           =(buffer-name site-id point-position-hint point-crdt-id mark-position-hint mark-crdt-id)=
+      =*-crdt-id= can be either a CRDT ID, or
+        - =nil=, which means clear the point/mark
+        - =""=, which means =(point-max)=
 
-  - cursor ::
-    body takes the form
-         =(buffer-name site-id point-position-hint point-crdt-id mark-position-hint mark-crdt-id)=
-    =*-crdt-id= can be either a CRDT ID, or
-      - =nil=, which means clear the point/mark
-      - =""=, which means =(point-max)=
+    + contact ::
+      body takes the form
+           =(site-id name address port)=
+      when name is =nil=, clear the contact for this =site-id=
 
-  - contact ::
-    body takes the form
-         =(site-id name address port)=
-    when name is =nil=, clear the contact for this =site-id=
+    + focus ::
+      body takes the form =(site-id buffer-name)=
 
-  - focus ::
-    body takes the form =(site-id buffer-name)=
+  - Login
+    + hello ::
+      This message is sent from client to server, when a client connect to the server.
+      body takes the form =(client-name &optional response)=
 
-  - hello ::
-    This message is sent from client to server, when a client connect to the server.
-    body takes the form =(client-name &optional response)=
+    + leave ::
+      This message is sometime sent from client to server to indicate disconnection, 
+      if the underlying proxy doesn't handle it properly.
+      body takes the form =()=
 
-  - leave ::
-    This message is sometime sent from client to server to indicate disconnection, 
-    if the underlying proxy doesn't handle it properly.
-    body takes the form =()=
+    + challenge ::
+      body takes the form =(salt)=
 
-  - challenge ::
-    body takes the form =(salt)=
+    + login ::
+      It's always sent after server receives a hello message.
+      Assigns an ID to the client
+      body takes the form =(site-id session-name)=.
 
-  - login ::
-    It's always sent after server receives a hello message.
-    Assigns an ID to the client
-    body takes the form =(site-id session-name)=.
+  - Initial Synchronization
+    + sync ::
+      This message is sent from server to client to get it sync to the state on the server.
+      Might be used for error recovery or other optimization in the future.
+      One optimization I have in mind is let server try to merge all CRDT item into a single
+      one and try to synchronize this state to clients at best effort.
+      body takes the form =(buffer-name . crdt-id-list)=
+      - =crdt-id-list= is generated from =CRDT--DUMP-IDS=
 
-  - sync ::
-    This message is sent from server to client to get it sync to the state on the server.
-    Might be used for error recovery or other optimization in the future.
-    One optimization I have in mind is let server try to merge all CRDT item into a single
-    one and try to synchronize this state to clients at best effort.
-    body takes the form =(buffer-name . crdt-id-list)=
-    - =crdt-id-list= is generated from =CRDT--DUMP-IDS=
+    + ready ::
+      body takes the form =(buffer-name major-mode-symbol)=
+      Indicates the end of a batch of synchronization messages
+      (which usually contains some =cursor= messages, a =sync= message,
+      and some =overlay-*= messages).
+      The client should now try to enable =major-mode-symbol= in the
+      synchronized buffer.
 
-  - ready ::
-    body takes the form =(buffer-name major-mode-symbol)=
-    Indicates the end of a batch of synchronization messages
-    (which usually contains some =cursor= messages, a =sync= message,
-    and some =overlay-*= messages).
-    The client should now try to enable =major-mode-symbol= in the
-    synchronized buffer.
+  - Buffer Service
+    + add ::
+      Indicates that the server has started sharing some buffers.
+      body takes the form =buffer-name-list=
 
-  - add ::
-    Indicates that the server has started sharing some buffers.
-    body takes the form =buffer-name-list=
+    + remove ::
+      Indicates that the server has stopped sharing some buffers.
+      body takes the form =buffer-name-list=
 
-  - remove ::
-    Indicates that the server has stopped sharing some buffers.
-    body takes the form =buffer-name-list=
+    + get ::
+      Request the server to resend =sync= message for a buffer.
+      body takes the form =(buffer-name)=
 
-  - get ::
-    Request the server to resend =sync= message for a buffer.
-    body takes the form =(buffer-name)=
+  - Overlay Synchronization
+    + overlay-add ::
+      body takes the form 
+      #+BEGIN_SRC
+      (buffer-name site-id logical-clock species
+        front-advance rear-advance
+        start-position-hint start-crdt-id
+        end-position-hint end-crdt-id)
+      #+END_SRC
 
-  - overlay-add ::
-    body takes the form 
-#+BEGIN_SRC
-(buffer-name site-id logical-clock species
-  front-advance rear-advance
-  start-position-hint start-crdt-id
-  end-position-hint end-crdt-id)
-#+END_SRC
+    + overlay-move ::
+      body takes the form
+      #+BEGIN_SRC
+      (buffer-name site-id logical-clock
+        start-position-hint start-crdt-id
+        end-position-hint end-crdt-id)
+      #+END_SRC
 
-  - overlay-move ::
-    body takes the form
-#+BEGIN_SRC
-(buffer-name site-id logical-clock
-  start-position-hint start-crdt-id
-  end-position-hint end-crdt-id)
-#+END_SRC
+    + overlay-put ::
+      body takes the form =(buffer-name site-id logical-clock prop value)=
 
-  - overlay-put ::
-    body takes the form =(buffer-name site-id logical-clock prop value)=
+    + overlay-remove ::
+      body takes the form =(buffer-name site-id logical-clock)=
 
-  - overlay-remove ::
-    body takes the form =(buffer-name site-id logical-clock)=
-  
-  - process ::
-    body takes the form =(buffer-name string)=
-    Sent from client to server, request sending =string= 
-    to the process buffer associated to =buffer-name=.
+  - Remote Buffer Process
+    + process ::
+      body takes the form =(buffer-name string)=
+      Sent from client to server, request sending =string= 
+      to the process buffer associated to =buffer-name=.
+
+    + process-mark ::
+      body takes the form =(buffer-name crdt-id position-hint)=.
+
+NOTE: for =overlay-put=, =overlay-move= and =process-mark=, server must also broadcast the message
+      *back to the client that generated it*, to ensure consistent global history.
 
 * Emacs as a collaborative operating system
 

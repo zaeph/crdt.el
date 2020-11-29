@@ -191,7 +191,7 @@ and HIGH-OFFSET.  (to save two copying from using CRDT--ID-REPLACE-OFFSET)"
   (get-text-property pos 'crdt-id obj))
 
 (defsubst crdt--get-starting-id (pos &optional obj)
-  "Get the CRDT-ID at POS in OBJ."
+  "Get the CRDT-ID object at POS in OBJ."
   (car (crdt--get-crdt-id-pair pos obj)))
 
 (defsubst crdt--end-of-block-p (pos &optional obj)
@@ -301,6 +301,8 @@ to avoid recusive calling of CRDT synchronization functions.")
 
 (crdt--defvar-permanent-local crdt--last-mark nil)
 
+(crdt--defvar-permanent-local crdt--last-process-mark-id nil)
+
 (crdt--defvar-permanent-local crdt--pseudo-cursor-table nil
                               "A hash table that maps SITE-ID to CONSes of the form (CURSOR-OVERLAY . REGION-OVERLAY).")
 
@@ -366,8 +368,10 @@ Also set CRDT--PSEUDO-CURSOR-TABLE to NIL."
     "CRDT mode" nil " CRDT" nil
     (if crdt-mode
         (progn
-          (setq crdt--pseudo-cursor-table (make-hash-table))
-          (setq crdt--overlay-table (make-hash-table :test 'equal))
+          (unless crdt--pseudo-cursor-table
+            (setq crdt--pseudo-cursor-table (make-hash-table)))
+          (unless crdt--overlay-table
+            (setq crdt--overlay-table (make-hash-table :test 'equal)))
           (crdt--install-hooks))
       (crdt--uninstall-hooks)
       (crdt--clear-pseudo-cursor-table)
@@ -888,7 +892,14 @@ and send message to other peers if needed."
               (unless (= beg end)
                 (dolist (message (crdt--local-insert beg end))
                   (crdt--broadcast-maybe
-                   (crdt--format-message message)))))))))))
+                   (crdt--format-message message)))))))
+        ;; process-mark synchronization is dependent on correct CRDT-ID
+        ;; therefore we must do it after the insert/change stuff is done
+        (crdt--send-process-mark-maybe)
+        ;; see if region stuff changed
+        (let ((cursor-message (crdt--local-cursor)))
+          (when cursor-message
+            (crdt--broadcast-maybe (crdt--format-message cursor-message))))))))
 
 ;;; CRDT point/mark synchronization
 
@@ -1033,7 +1044,7 @@ If (CRDT--SESSION-NETWORK-PROCESS CRDT--SESSION) is a server process,
 broadcast MESSAGE-STRING to clients except the one of which CLIENT-ID
 property is EQ to WITHOUT.
 If (CRDT--SESSION-NETWORK-PROCESS CRDT--SESSION) is a client process,
-send MESSAGE-STRING to server when WITHOUT is T."
+send MESSAGE-STRING to server when WITHOUT is non-nil."
   (when crdt--log-network-traffic
     (message "Send %s" message-string))
   (if (process-contact (crdt--session-network-process crdt--session) :server)
@@ -1071,9 +1082,11 @@ The overlay is FRONT-ADVANCE and REAR-ADVANCE, and lies between BEG and END."
   "Send messages to a client about the full state of BUFFER.
 The network process for the client connection is PROCESS."
   (with-current-buffer buffer
-    (process-send-string process (crdt--format-message `(sync
-                                                         ,crdt--buffer-network-name
-                                                         ,@ (crdt--dump-ids (point-min) (point-max) nil nil t))))
+    (process-send-string process
+                         (crdt--format-message
+                          `(sync
+                            ,crdt--buffer-network-name
+                            ,@ (crdt--dump-ids (point-min) (point-max) nil nil t))))
     ;; synchronize cursor
     (maphash (lambda (site-id ov-pair)
                (cl-destructuring-bind (cursor-ov . region-ov) ov-pair
@@ -1111,6 +1124,15 @@ The network process for the client connection is PROCESS."
                                                                ,(car k) ,(cdr k) ,prop ,value))))))
              crdt--overlay-table)
 
+    ;; synchronize process marker if there's any
+    (let ((buffer-process (get-buffer-process buffer)))
+      (when buffer-process
+        (let ((mark-pos (marker-position (process-mark buffer-process))))
+          (process-send-string process
+                               (crdt--format-message
+                                `(process-mark ,crdt--buffer-network-name
+                                               ,(crdt--get-id mark-pos) ,mark-pos))))))
+
     (process-send-string process (crdt--format-message `(ready ,crdt--buffer-network-name ,major-mode)))))
 
 (defun crdt--greet-client (process)
@@ -1134,19 +1156,23 @@ The network process for the client connection is PROCESS."
                                     (cons 'add (hash-table-keys (crdt--session-buffer-table crdt--session)))))
       ;; synchronize contact
       (maphash (lambda (k v)
-                 (process-send-string
-                  process (crdt--format-message `(contact ,k ,(crdt--contact-metadata-display-name v)
-                                                          ,(crdt--contact-metadata-host v)
-                                                          ,(crdt--contact-metadata-service v))))
-                 (process-send-string
-                  process (crdt--format-message `(focus ,k ,(crdt--contact-metadata-focused-buffer-name v)))))
+                 (process-send-string process
+                                      (crdt--format-message
+                                       `(contact ,k ,(crdt--contact-metadata-display-name v)
+                                                 ,(crdt--contact-metadata-host v)
+                                                 ,(crdt--contact-metadata-service v))))
+                 (process-send-string process
+                                      (crdt--format-message
+                                       `(focus ,k ,(crdt--contact-metadata-focused-buffer-name v)))))
                (crdt--session-contact-table crdt--session))
       (process-send-string process
-                           (crdt--format-message `(contact ,(crdt--session-local-id crdt--session)
-                                                           ,(crdt--session-local-name crdt--session))))
+                           (crdt--format-message
+                            `(contact ,(crdt--session-local-id crdt--session)
+                                      ,(crdt--session-local-name crdt--session))))
       (process-send-string process
-                           (crdt--format-message `(focus ,(crdt--session-local-id crdt--session)
-                                                         ,(crdt--session-focused-buffer-name crdt--session))))
+                           (crdt--format-message
+                            `(focus ,(crdt--session-local-id crdt--session)
+                                    ,(crdt--session-focused-buffer-name crdt--session))))
       (let ((contact-message `(contact ,client-id ,(process-get process 'client-name)
                                        ,(process-contact process :host)
                                        ,(process-contact process :service))))
@@ -1764,7 +1790,7 @@ Join with DISPLAY-NAME."
                                      (crdt--base64-encode-maybe (crdt--get-id (1- end))))))))))))
   (apply orig-fun ov beg end args))
 
-(cl-defmethod crdt-process-message ((message (head overlay-move)) process)
+(cl-defmethod crdt-process-message ((message (head overlay-move)) _process)
   (cl-destructuring-bind (buffer-name site-id logical-clock
                                       start-hint start-id-base64 end-hint end-id-base64)
       (cdr message)
@@ -1780,7 +1806,7 @@ Join with DISPLAY-NAME."
                 (end (crdt--find-id (base64-decode-string end-id-base64) end-hint rear-advance)))
            (let ((crdt--inhibit-overlay-advices t))
              (move-overlay ov start end)))))))
-  (crdt--broadcast-maybe (crdt--format-message message) (process-get process 'client-id)))
+  (crdt--broadcast-maybe (crdt--format-message message) nil))
 
 (defun crdt--delete-overlay-advice (orig-fun ov)
   (unless crdt--inhibit-overlay-advices
@@ -1835,7 +1861,7 @@ Join with DISPLAY-NAME."
            (when (memq (crdt--overlay-metadata-species meta) crdt--enabled-overlay-species)
              (let ((crdt--inhibit-overlay-advices t))
                (overlay-put ov prop value))))))))
-  (crdt--broadcast-maybe (crdt--format-message message) (process-get process 'client-id)))
+  (crdt--broadcast-maybe (crdt--format-message message) nil))
 
 (advice-add 'make-overlay :around #'crdt--make-overlay-advice)
 
@@ -1872,7 +1898,8 @@ Join with DISPLAY-NAME."
 
 ;;; pseudo process
 (cl-defstruct (crdt--pseudo-process (:constructor crdt--make-pseudo-process))
-  buffer)
+  buffer
+  mark)
 
 (defun crdt--pseudo-process-send-string (pseudo-process string)
   (with-current-buffer (crdt--pseudo-process-buffer pseudo-process)
@@ -1893,15 +1920,50 @@ Join with DISPLAY-NAME."
   (and (setq buffer (get-buffer buffer))
        (with-current-buffer buffer
          (if (and crdt--session (not (crdt--server-p)))
-             (or crdt--buffer-pseudo-process
-                 (setq crdt--buffer-pseudo-process
-                       (crdt--make-pseudo-process :buffer buffer)))
+             crdt--buffer-pseudo-process
            (funcall orig-func buffer)))))
+
+(defun crdt--process-mark-advice (orig-func process)
+  (if (crdt--pseudo-process-p process)
+      (crdt--pseudo-process-mark process)
+    (funcall orig-func process)))
+
+(cl-defmethod crdt-process-message ((message (head process-mark)) process)
+  (cl-destructuring-bind (buffer-name crdt-id position-hint) (cdr message)
+    (crdt--with-buffer-name
+     buffer-name
+     (save-excursion
+       (goto-char (crdt--id-to-pos crdt-id position-hint))
+       (let ((buffer-process (get-buffer-process (current-buffer))))
+         (if buffer-process
+             (progn (set-marker (process-mark buffer-process) (point))
+                    (setq crdt--last-process-mark-id crdt-id)
+                    (crdt--broadcast-maybe (crdt--format-message message) nil))
+           (unless (crdt--server-p)
+             (setq crdt--buffer-pseudo-process
+                   (crdt--make-pseudo-process :buffer (current-buffer) :mark (point-marker)))
+             (setq crdt--last-process-mark-id crdt-id))))))))
+
+(defun crdt--send-process-mark-maybe ()
+  (let ((buffer-process (get-buffer-process (current-buffer))))
+    (when buffer-process
+      (let* ((mark-pos (marker-position (process-mark buffer-process)))
+             (current-id (crdt--get-id mark-pos)))
+        (unless (string-equal crdt--last-process-mark-id current-id)
+          (setq crdt--last-process-mark-id current-id)
+          (crdt--broadcast-maybe
+           (crdt--format-message
+            `(process-mark ,crdt--buffer-network-name
+                           ,current-id ,mark-pos))))))))
 
 (defun crdt--process-status-advice (orig-func process)
   (if (crdt--pseudo-process-p process)
       'run
     (funcall orig-func process)))
+
+(defun crdt--delete-process-advice (orig-func process)
+  (unless (crdt--pseudo-process-p process)
+      (funcall orig-func process)))
 
 (defun crdt--process-buffer-advice (orig-func process)
   (if (crdt--pseudo-process-p process)
@@ -1917,6 +1979,8 @@ Join with DISPLAY-NAME."
 (advice-add 'get-buffer-process :around #'crdt--get-buffer-process-advice)
 (advice-add 'process-status :around #'crdt--process-status-advice)
 (advice-add 'process-buffer :around #'crdt--process-buffer-advice)
+(advice-add 'process-mark :around #'crdt--process-mark-advice)
+(advice-add 'delete-process :around #'crdt--delete-process-advice)
 
 (cl-defmethod crdt-process-message ((message (head process)) process)
   (cl-destructuring-bind (buffer-name string) (cdr message)
