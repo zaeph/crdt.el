@@ -295,7 +295,12 @@ Must be used inside CRDT--WITH-INSERTION-INFORMATION."
 This is useful for functions that apply remote change to local buffer,
 to avoid recusive calling of CRDT synchronization functions.")
 
-(crdt--defvar-permanent-local crdt--changed-string nil)
+(crdt--defvar-permanent-local crdt--changed-string nil
+                              "Save changed substring in CRDT--BEFORE-CHANGE.")
+
+(crdt--defvar-permanent-local crdt--changed-start nil
+                              "Save start character address of changes in CRDT--BEFORE-CHANGE,
+to recover the portion being overwritten in CRDT--AFTER-CHANGE.")
 
 (crdt--defvar-permanent-local crdt--last-point nil)
 
@@ -793,10 +798,11 @@ Start the search around POSITION-HINT."
   ;; (crdt--verify-buffer)
   )
 
-(defun crdt--local-delete (beg end)
+(defun crdt--local-delete (beg end length)
   "Handle local deletion event and return a message to be sent to other peers.
-The deletion happens between BEG and END."
-  (let ((outer-end end))
+The deletion happens between BEG and END, and have LENGTH."
+  (let ((outer-end end)
+        (crdt--changed-string (crdt--changed-string beg length)))
     (crdt--with-insertion-information
      (beg 0 nil crdt--changed-string nil (length crdt--changed-string))
      (when (crdt--split-maybe)
@@ -807,10 +813,10 @@ The deletion happens between BEG and END."
                          (crdt--id-replace-offset ending-id (+ 1 left-offset (length crdt--changed-string))))))))
     (crdt--with-insertion-information
      ((length crdt--changed-string) outer-end crdt--changed-string nil 0 nil)
-     (crdt--split-maybe)))
-  ;; (crdt--verify-buffer)
-  `(delete ,crdt--buffer-network-name
-           ,beg ,@ (crdt--dump-ids 0 (length crdt--changed-string) crdt--changed-string t)))
+     (crdt--split-maybe))
+    ;; (crdt--verify-buffer)
+    `(delete ,crdt--buffer-network-name
+             ,beg ,@ (crdt--dump-ids 0 (length crdt--changed-string) crdt--changed-string t))))
 
 (defun crdt--remote-delete (position-hint id-items)
   "Handle remote deletion message of ID-ITEMS.
@@ -843,7 +849,13 @@ Start the search for those ID-ITEMs around POSITION-HINT."
   "Before change hook used by CRDT-MODE.
 It saves the content to be changed (between BEG and END) into CRDT--CHANGED-STRING."
   (unless crdt--inhibit-update
-    (setq crdt--changed-string (buffer-substring beg end))))
+    (setq crdt--changed-string (buffer-substring beg end))
+    (setq crdt--changed-start beg)))
+
+(defsubst crdt--changed-string (beg length)
+  "Retrieve part of CRDT--CHANGED-STRING starting at BEG with LENGTH before change."
+  (let ((from (- beg crdt--changed-start)))
+    (substring crdt--changed-string from (+ from length))))
 
 (defsubst crdt--crdt-id-assimilate (template beg &optional object)
   "Make the CRDT-ID property after BEG in OBJECT the same as TEMPLATE.
@@ -860,11 +872,9 @@ TEMPLATE should be a string.  If OBJECT is NIL, use current buffer."
 
 (defun crdt--after-change (beg end length)
   "After change hook used by CRDT-MODE.
-It examine CRDT--CHANGED-STRING (should be saved by
-CRDT--BEFORE-STRING and whose length shall equal to LENGTH)
-and current content between BEG and END,
-update the CRDT-ID for any newly inserted text,
-and send message to other peers if needed."
+It examine (CRDT--CHANGED-STRING) (should be saved by CRDT--BEFORE-STRING)
+and current content between BEG and END with LENGTH,
+update the CRDT-ID for any newly inserted text, and send message to other peers if needed."
   (when (markerp beg)
     (setq beg (marker-position beg)))
   (when (markerp end)
@@ -881,14 +891,14 @@ and send message to other peers if needed."
         (save-excursion
           (goto-char beg)
           (if (and (= length (- end beg))
-                   (string-equal crdt--changed-string
+                   (string-equal (crdt--changed-string beg length)
                                  (buffer-substring-no-properties beg end)))
-              (crdt--crdt-id-assimilate crdt--changed-string beg)
+              (crdt--crdt-id-assimilate (crdt--changed-string beg length) beg)
             (widen)
             (with-silent-modifications
               (unless (= length 0)
                 (crdt--broadcast-maybe
-                 (crdt--format-message (crdt--local-delete beg end))))
+                 (crdt--format-message (crdt--local-delete beg end length))))
               (unless (= beg end)
                 (dolist (message (crdt--local-insert beg end))
                   (crdt--broadcast-maybe
@@ -1074,7 +1084,7 @@ The overlay is FRONT-ADVANCE and REAR-ADVANCE, and lies between BEG and END."
                           (base64-encode-string (crdt--get-id end))
                         (crdt--base64-encode-maybe (crdt--get-id (1- end))))))
 
-(defun crdt--generate-challenge ()
+(defsubst crdt--generate-challenge ()
   "Generate a challenge string for authentication."
   (apply #'unibyte-string (cl-loop for i below 32 collect (random 256))))
 
