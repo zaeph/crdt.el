@@ -44,8 +44,8 @@
   "Ask for server password everytime a CRDT server is to be started."
   :type 'boolean)
 
-(defcustom crdt-confirm-stop-session t
-  "Ask for confirmation when a CRDT server with some client connected is to be stopped."
+(defcustom crdt-confirm-disconnect t
+  "Ask for confirmation when a CRDT server is to stop the connection from some client."
   :type 'boolean)
 
 (defvar crdt--log-network-traffic nil
@@ -598,9 +598,26 @@ Otherwise use a dedicated buffer for displaying active users on CRDT-BUFFER."
                t)))
         (message "Doesn't have position information for this user yet.")))))
 
+(defun crdt--user-menu-kill ()
+  "Disconnect the user under point in CRDT user menu.
+Only server can perform this action."
+  (interactive)
+  (if (crdt--server-p)
+      (let ((site-id (tabulated-list-get-id)))
+        (if site-id
+            (if (eq site-id (crdt--session-local-id crdt--session))
+                (message "Suicide is not allowed.")
+                (dolist (p (process-list))
+                  (when (eq (process-get p 'client-id) site-id)
+                    (delete-process p))))
+          (message "We somehow don't have the SITE-ID for this user.
+ Please submit a bug report to crdt.el maintainer.")))
+    (message "Only server can disconnect a user.")))
+
 (defvar crdt-user-menu-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET") #'crdt--user-menu-goto)
+    (define-key map (kbd "k") #'crdt--user-menu-kill)
     map))
 
 (define-derived-mode crdt-user-menu-mode tabulated-list-mode
@@ -610,9 +627,10 @@ Otherwise use a dedicated buffer for displaying active users on CRDT-BUFFER."
                                ("Address" 15 t)]))
 
 (defun crdt-list-users (&optional crdt-buffer display-buffer)
-  "Display a list of active users working on a CRDT-shared buffer CRDT-BUFFER.
+  "Display a list of active users working on a CRDT-shared session.
+Find the session in CRDT-BUFFER if non NIL, or current buffer.
 If DISPLAY-BUFFER is provided, display the output there.
-Otherwise use a dedicated buffer for displaying active users on CRDT-BUFFER."
+Otherwise create a dedicated buffer."
   (interactive)
   (with-current-buffer (or crdt-buffer (current-buffer))
     (unless crdt--session
@@ -1543,7 +1561,7 @@ Setup up the server with PASSWORD and assign this Emacs DISPLAY-NAME."
 (defun crdt--stop-session (session)
   "Kill the CRDT SESSION.
 Disconnect if it's a client session, or stop serving if it's a server session."
-  (when (if (and crdt-confirm-stop-session
+  (when (if (and crdt-confirm-disconnect
                  (crdt--server-p session)
                  (crdt--session-network-clients session))
             (yes-or-no-p "There are yet connected clients. Stop session? ")
