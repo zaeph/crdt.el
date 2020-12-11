@@ -394,13 +394,18 @@ If SESSION is nil, use current CRDT--SESSION."
 
 (defmacro crdt--with-buffer-name (name &rest body)
   "Find CRDT shared buffer associated with NAME and evaluate BODY in it.
+Also, try to recover from synchronization error if any error happens in BODY.
 Must be called when CURRENT-BUFFER is a CRDT status buffer.
 If such buffer doesn't exist yet, do nothing."
   `(let (crdt-buffer)
      (setq crdt-buffer (gethash ,name (crdt--session-buffer-table crdt--session)))
      (when (and crdt-buffer (buffer-live-p crdt-buffer))
        (with-current-buffer crdt-buffer
-         ,@body))))
+         (condition-case err
+             ,(cons 'progn body)
+           (error (if (crdt--server-p)
+                      (signal (car err) (cdr err)) ; didn't implement server side recovery yet
+                    (crdt--client-recover))))))))
 
 (defmacro crdt--with-buffer-name-pull (name &rest body)
   "Find CRDT shared buffer associated with NAME and evaluate BODY in it.
@@ -423,7 +428,8 @@ after synchronization is completed."
              (crdt-mode)
              (crdt--broadcast-maybe (crdt--format-message `(get ,,name)))
              (let ((crdt--inhibit-update t))
-               (insert "Synchronizing with server..."))
+               (insert "Synchronizing with server...")
+               (read-only-mode))
              (setq crdt--buffer-sync-callback
                    (lambda ()
                      ,@body))))))))
@@ -1057,6 +1063,17 @@ Verify that CRDT IDs in a document follows ascending order."
           (setq pos next-pos)
           (setq id next-id))))))
 
+;;; Recovery
+
+(defun crdt--client-recover ()
+  "Try to recover from a synchronization failure from a client.
+Current buffer is assmuned to be the one with synchronization error."
+  (ding)
+  (read-only-mode)
+  (message "Synchronization error detected, try recovering...")
+  (crdt--broadcast-maybe
+   (crdt--format-message `(get ,crdt--buffer-network-name))))
+
 ;;; Network protocol
 
 (defun crdt--format-message (args)
@@ -1251,6 +1268,7 @@ The network process for the client connection is PROCESS."
     (cl-destructuring-bind (buffer-name . ids) (cdr message)
       (crdt--with-buffer-name
        buffer-name
+       (read-only-mode -1)
        (let ((crdt--inhibit-update t))
          (unless crdt--buffer-sync-callback
            ;; try to get to the same position after sync,
@@ -1393,7 +1411,8 @@ Handle received STRING from PROCESS."
                 (error (message "%s error when processing message from %s:%s, disconnecting." err
                                 (process-contact process :host) (process-contact process :service))
                        (if (crdt--server-p)
-                           (delete-process process)
+                           (progn
+                             (delete-process process))
                          (crdt--stop-session crdt--session))))))
           (delete-region (point-min) (point))
           (goto-char (point-min)))))))
@@ -1422,6 +1441,7 @@ Handle received STRING from PROCESS."
   (unless (eq (process-status process) 'open)
     (when (process-get process 'tuntox-process)
       (process-send-string process (crdt--format-message '(leave))))
+    (ding)
     (crdt--stop-session (process-get process 'crdt-session))))
 
 ;;; UI commands
