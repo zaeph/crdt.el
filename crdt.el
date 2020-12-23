@@ -1965,7 +1965,8 @@ Join with DISPLAY-NAME."
     (funcall orig-func process start end)))
 
 (defun crdt--get-buffer-process-advice (orig-func buffer)
-  (and (setq buffer (get-buffer buffer))
+  (and buffer
+       (setq buffer (get-buffer buffer))
        (with-current-buffer buffer
          (if (and crdt--session (not (crdt--server-p)))
              crdt--buffer-pseudo-process
