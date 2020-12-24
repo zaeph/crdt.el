@@ -1004,7 +1004,8 @@ Send message to other peers about any changes."
   (unless (eq crdt--buffer-network-name (crdt--session-focused-buffer-name crdt--session))
     (crdt--broadcast-maybe
      (crdt--format-message `(focus ,(crdt--session-local-id crdt--session) ,crdt--buffer-network-name)))
-    (setf (crdt--session-focused-buffer-name crdt--session) crdt--buffer-network-name))
+    (setf (crdt--session-focused-buffer-name crdt--session) crdt--buffer-network-name)
+    (crdt--refresh-users-maybe))
   (let ((cursor-message (crdt--local-cursor)))
     (when cursor-message
       (crdt--broadcast-maybe (crdt--format-message cursor-message)))))
