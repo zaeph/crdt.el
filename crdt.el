@@ -1605,8 +1605,12 @@ Disconnect if it's a client session, or stop serving if it's a server session."
     (setq crdt--session-list
           (delq session crdt--session-list))
     (crdt--refresh-sessions-maybe)
-    (let ((proxy-process (process-get (crdt--session-network-process session) 'tuntox-process)))
+    (let* ((process (crdt--session-network-process session))
+           (proxy-process (process-get process 'tuntox-process))
+           (process-buffer (process-buffer process)))
       (delete-process (crdt--session-network-process session))
+      (when (and process-buffer (buffer-live-p process-buffer))
+        (kill-buffer process-buffer))
       (when (and proxy-process (process-live-p proxy-process))
         (interrupt-process proxy-process)))
     (message "Disconnected.")))
