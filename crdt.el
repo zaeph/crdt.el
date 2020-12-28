@@ -1495,10 +1495,12 @@ Otherwise, return the list of names for client sessions."
   (cl-find name crdt--session-list
            :test 'equal :key #'crdt--session-name))
 
-(defun crdt-share-buffer (session-name)
+(defun crdt-share-buffer (session-name &optional port)
   "Share the current buffer in the CRDT session with name SESSION-NAME.
-Create a new one if such a CRDT session doesn't exist.
-If SESSION-NAME is empty, use the buffer name of the current buffer."
+Create a new one if such a CRDT session doesn't exist.  When PORT
+is non-NIL use when creating a new session, otherwise prompt
+from minibuffer.  If SESSION-NAME is empty, use the buffer name
+of the current buffer."
   (interactive
    (progn
      (when (and crdt-mode crdt--session)
@@ -1516,7 +1518,7 @@ If SESSION-NAME is empty, use the buffer name of the current buffer."
   (let ((session (crdt--get-session session-name)))
     (if session
         (crdt--share-buffer (current-buffer) session)
-      (let ((port (read-from-minibuffer "Create new session on port (default 6530): " nil nil t nil "6530")))
+      (let ((port (or port (read-from-minibuffer "Create new session on port (default 6530): " nil nil t nil "6530"))))
         (when (not (numberp port))
           (error "Port must be a number"))
         (crdt--share-buffer (current-buffer) (crdt-new-session port session-name))))))
