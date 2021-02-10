@@ -750,7 +750,7 @@ Start the search from POS."
   (let* ((left-pos (previous-single-property-change (min (1+ pos) (point-max))
                                                     'crdt-id nil (point-min)))
          (left-id (crdt--get-starting-id left-pos))
-         (right-pos (next-single-property-change pos 'crdt-id nil (point-max)))
+         (right-pos (next-single-property-change (min pos (point-max)) 'crdt-id nil (point-max)))
          (right-id (crdt--get-starting-id right-pos))
          (moving-forward nil))
     (cl-macrolet ((move-forward ()
