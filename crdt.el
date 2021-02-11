@@ -462,6 +462,7 @@ after synchronization is completed."
 (defvar crdt-session-menu-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET") #'crdt--session-menu-goto)
+    (define-key map [mouse-1] #'crdt--session-menu-goto)
     (define-key map (kbd "k") #'crdt--session-menu-kill)
     map))
 
@@ -537,6 +538,7 @@ Only server can perform this action."
 (defvar crdt-buffer-menu-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET") #'crdt--buffer-menu-goto)
+    (define-key map [mouse-1] #'crdt--buffer-menu-goto)
     (define-key map (kbd "k") #'crdt--buffer-menu-kill)
     map))
 
@@ -635,6 +637,7 @@ Only server can perform this action."
 (defvar crdt-user-menu-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET") #'crdt--user-menu-goto)
+    (define-key map [mouse-1] #'crdt--user-menu-goto)
     (define-key map (kbd "k") #'crdt--user-menu-kill)
     map))
 
