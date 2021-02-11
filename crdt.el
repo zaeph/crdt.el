@@ -369,6 +369,18 @@ Also set CRDT--PSEUDO-CURSOR-TABLE to NIL."
              crdt--pseudo-cursor-table)
     (setq crdt--pseudo-cursor-table nil)))
 
+(defun crdt--after-change-major-mode ()
+  "Re-enable CRDT-MODE after major mode change."
+  (when (and crdt--session crdt--buffer-network-name
+             (eq (current-buffer)
+                 (gethash crdt--buffer-network-name
+                          (crdt--session-buffer-table crdt--session))))
+    (crdt--broadcast-maybe
+     (crdt--format-message `(ready ,crdt--buffer-network-name ,major-mode)) nil)
+    (crdt-mode)))
+
+(add-hook 'after-change-major-mode-hook #'crdt--after-change-major-mode)
+
 (define-minor-mode crdt-mode
     "CRDT mode" nil " CRDT" nil
     (if crdt-mode
