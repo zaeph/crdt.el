@@ -1148,6 +1148,8 @@ The network process for the client connection is PROCESS."
                           `(sync
                             ,crdt--buffer-network-name
                             ,@ (crdt--dump-ids (point-min) (point-max) nil nil t))))
+    (process-send-string process (crdt--format-message `(ready ,crdt--buffer-network-name ,major-mode)))
+
     ;; synchronize cursor
     (maphash (lambda (site-id ov-pair)
                (cl-destructuring-bind (cursor-ov . region-ov) ov-pair
@@ -1192,9 +1194,7 @@ The network process for the client connection is PROCESS."
           (process-send-string process
                                (crdt--format-message
                                 `(process-mark ,crdt--buffer-network-name
-                                               ,(crdt--get-id mark-pos) ,mark-pos))))))
-
-    (process-send-string process (crdt--format-message `(ready ,crdt--buffer-network-name ,major-mode)))))
+                                               ,(crdt--get-id mark-pos) ,mark-pos))))))))
 
 (defun crdt--greet-client (process)
   "Send initial information when a client connects.
