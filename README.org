@@ -109,6 +109,10 @@ You can also press ~k~ in the session list (show it by =M-x crdt-list-sessions=)
 The server Emacs has the privilege to disconnect a user from a session.
 To do so, press ~k~ on an entry in the user list (show it by =M-x crdt-list-users=).
 
+** Visualizing author of parts of the document
+Turn on =crdt-visualize-author-mode=. Colored underlines are added to each part of the document,
+based on which user authored it.
+
 ** Synchronizing Org folding status
 
 Turn on =crdt-org-sync-overlay-mode=. All peers that have this enabled have their
