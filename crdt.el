@@ -394,6 +394,29 @@ Also set CRDT--PSEUDO-CURSOR-TABLE to NIL."
       (crdt--clear-pseudo-cursor-table)
       (setq crdt--overlay-table nil)))
 
+;;; Author visualization
+
+(defsubst crdt--visualize-author-1 (beg end site)
+  (put-text-property beg end
+                     'font-lock-face `(:underline ,(crdt--get-cursor-color site))))
+(defun crdt--visualize-author ()
+  (save-restriction
+    (widen)
+    (let ((pos (point-max)))
+     (while (> pos (point-min))
+       (let* ((prev-pos (previous-single-property-change pos 'crdt-id nil (point-min)))
+              (crdt-id (car-safe (crdt--get-crdt-id-pair prev-pos))))
+         (when crdt-id (crdt--visualize-author-1 prev-pos pos (crdt--id-site crdt-id)))
+         (setq pos prev-pos))))))
+
+(define-minor-mode crdt-visualize-author-mode
+    "" nil " CRDT-VAuthor" nil
+    (if crdt-visualize-author-mode
+        (crdt--visualize-author)
+      (save-restriction
+        (widen)
+        (remove-list-of-text-properties (point-min) (point-max) '(font-lock-face)))))
+
 ;;; Shared buffer utils
 
 (defsubst crdt--server-p (&optional session)
@@ -722,6 +745,8 @@ It informs other peers that the buffer is killed."
 (defun crdt--local-insert (beg end)
   "To be called after a local insert happened in current buffer from BEG to END.
 Returns a list of (insert type) messages to be sent."
+  (when crdt-visualize-author-mode
+    (crdt--visualize-author-1 beg end (crdt--session-local-id crdt--session)))
   (let (resulting-commands)
     (crdt--with-insertion-information
      (beg end)
@@ -815,6 +840,8 @@ Start the search around POSITION-HINT."
       (goto-char beg)
       (insert content)
       (setq end (point))
+      (when crdt-visualize-author-mode
+        (crdt--visualize-author-1 beg end (crdt--id-site id)))
       ;; work around for input method overlays
       (cl-loop for ov in (overlays-at beg)
             do (unless (overlay-get ov 'crdt-meta)
