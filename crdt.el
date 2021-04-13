@@ -1582,7 +1582,6 @@ Setup up the server with PASSWORD and assign this Emacs DISPLAY-NAME."
   (let* ((network-process (make-network-process
                            :name "CRDT Server"
                            :server t
-                           :family 'ipv4
                            :host "0.0.0.0"
                            :service port
                            :filter #'crdt--network-filter
@@ -1741,7 +1740,6 @@ Join with DISPLAY-NAME."
                                               :name "CRDT Client"
                                               :buffer (generate-new-buffer "*crdt-client*")
                                               :host address
-                                              :family 'ipv4
                                               :service port
                                               :filter #'crdt--network-filter
                                               :sentinel #'crdt--client-process-sentinel))
