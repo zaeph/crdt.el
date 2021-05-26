@@ -864,6 +864,11 @@ Start the search around POSITION-HINT."
   ;; (crdt--verify-buffer)
   )
 
+(defsubst crdt--changed-string (beg length)
+  "Retrieve part of CRDT--CHANGED-STRING starting at BEG with LENGTH before change."
+  (let ((from (- beg crdt--changed-start)))
+    (substring crdt--changed-string from (+ from length))))
+
 (defun crdt--local-delete (beg end length)
   "Handle local deletion event and return a message to be sent to other peers.
 The deletion happens between BEG and END, and have LENGTH."
@@ -917,11 +922,6 @@ It saves the content to be changed (between BEG and END) into CRDT--CHANGED-STRI
   (unless crdt--inhibit-update
     (setq crdt--changed-string (buffer-substring beg end))
     (setq crdt--changed-start beg)))
-
-(defsubst crdt--changed-string (beg length)
-  "Retrieve part of CRDT--CHANGED-STRING starting at BEG with LENGTH before change."
-  (let ((from (- beg crdt--changed-start)))
-    (substring crdt--changed-string from (+ from length))))
 
 (defsubst crdt--crdt-id-assimilate (template beg &optional object)
   "Make the CRDT-ID property after BEG in OBJECT the same as TEMPLATE.
@@ -1944,7 +1944,7 @@ Join with DISPLAY-NAME."
                 (invalid-read-syntax)))))))
     (funcall orig-fun ov prop value)))
 
-(cl-defmethod crdt-process-message ((message (head overlay-put)) process)
+(cl-defmethod crdt-process-message ((message (head overlay-put)) _process)
   (cl-destructuring-bind (buffer-name site-id logical-clock prop value) (cdr message)
     (crdt--with-buffer-name
      buffer-name
@@ -2034,7 +2034,7 @@ Join with DISPLAY-NAME."
       process
       (funcall orig-func process)))
 
-(cl-defmethod crdt-process-message ((message (head process-mark)) process)
+(cl-defmethod crdt-process-message ((message (head process-mark)) _process)
   (cl-destructuring-bind (buffer-name crdt-id position-hint) (cdr message)
     (crdt--with-buffer-name
      buffer-name
@@ -2091,22 +2091,35 @@ Join with DISPLAY-NAME."
       nil
       (funcall orig-func process func)))
 
-(advice-add 'process-send-string :around #'crdt--process-send-string-advice)
-(advice-add 'process-send-region :around #'crdt--process-send-region-advice)
-(advice-add 'processp :around #'crdt--processp-advice)
-(advice-add 'get-buffer-process :around #'crdt--get-buffer-process-advice)
-(advice-add 'get-process :around #'crdt--get-process-advice)
-(advice-add 'process-status :around #'crdt--process-status-advice)
-(advice-add 'process-buffer :around #'crdt--process-buffer-advice)
-(advice-add 'process-mark :around #'crdt--process-mark-advice)
-(advice-add 'delete-process :around #'crdt--delete-process-advice)
-(advice-add 'process-name :around #'crdt--process-name-advice)
-(advice-add 'process-sentinel :around #'crdt--process-sentinel/filter-advice)
-(advice-add 'process-filter :around #'crdt--process-sentinel/filter-advice)
-(advice-add 'set-process-sentinel :around #'crdt--set-process-sentinel/filter-advice)
-(advice-add 'set-process-filter :around #'crdt--set-process-sentinel/filter-advice)
+(defvar crdt--process-advice-alist
+  '((process-send-string . crdt--process-send-string-advice)
+    (process-send-region . crdt--process-send-region-advice)
+    (processp . crdt--processp-advice)
+    (get-buffer-process . crdt--get-buffer-process-advice)
+    (get-process . crdt--get-process-advice)
+    (process-status . crdt--process-status-advice)
+    (process-buffer . crdt--process-buffer-advice)
+    (process-mark . crdt--process-mark-advice)
+    (delete-process . crdt--delete-process-advice)
+    (process-name . crdt--process-name-advice)
+    (process-sentinel . crdt--process-sentinel/filter-advice)
+    (process-filter . crdt--process-sentinel/filter-advice)
+    (set-process-sentinel . crdt--set-process-sentinel/filter-advice)
+    (set-process-filter . crdt--set-process-sentinel/filter-advice)))
 
-(cl-defmethod crdt-process-message ((message (head process)) process)
+(defun crdt--install-process-advices ()
+  "Globally enable advices for simulating remote buffer process.
+We don't install them by default because those advices sometimes seem to interfere with other packages."
+  (mapcar (lambda (pair)
+            (advice-add (car pair) :around (cdr pair)))
+          crdt--process-advice-alist))
+
+(defun crdt--uninstall-process-advices ()
+  (mapcar (lambda (pair)
+            (advice-remove (car pair) (cdr pair)))
+          crdt--process-advice-alist))
+
+(cl-defmethod crdt-process-message ((message (head process)) _process)
   (cl-destructuring-bind (buffer-name string) (cdr message)
     (crdt--with-buffer-name
      buffer-name
