@@ -497,6 +497,7 @@ after synchronization is completed."
                                ("Buffers" 30 t)
                                ("Users" 15 t)]))
 
+;;;###autoload
 (defun crdt-list-sessions (&optional display-buffer)
   "Display a list of active CRDT sessions.
 If DISPLAY-BUFFER is provided, display the output there."
@@ -571,6 +572,7 @@ Only server can perform this action."
                                ("Network Name" 30 t)
                                ("Users" 15 t)]))
 
+;;;###autoload
 (defun crdt-list-buffers (&optional crdt-buffer display-buffer)
   "Display a list of buffers shared in the current CRDT session.
 If DISPLAY-BUFFER is provided, display the output there.
@@ -670,6 +672,7 @@ Only server can perform this action."
                                ("Focused Buffer" 30 t)
                                ("Address" 15 t)]))
 
+;;;###autoload
 (defun crdt-list-users (&optional crdt-buffer display-buffer)
   "Display a list of active users working on a CRDT-shared session.
 Find the session in CRDT-BUFFER if non NIL, or current buffer.
@@ -1537,6 +1540,7 @@ Otherwise, return the list of names for client sessions."
   (cl-find name crdt--session-list
            :test 'equal :key #'crdt--session-name))
 
+;;;###autoload
 (defun crdt-share-buffer (session-name &optional port)
   "Share the current buffer in the CRDT session with name SESSION-NAME.
 Create a new one if such a CRDT session doesn't exist.  When PORT
@@ -1714,6 +1718,7 @@ If SESSION-NAME is nil, disconnect from the current session."
 
 (defvar crdt-connect-url-history nil)
 
+;;;###autoload
 (defun crdt-connect (url &optional display-name)
   "Connect to a CRDT server running at URL.
 Open a new buffer to display the shared content.
