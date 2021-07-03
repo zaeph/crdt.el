@@ -2,8 +2,8 @@
 ;;
 ;; Copyright (C) 2020 Qiantan Hong
 ;;
-;; Author: Qiantan Hong <qhong@mit.edu>
-;; Maintainer: Qiantan Hong <qhong@mit.edu>
+;; Author: Qiantan Hong <qhong@alum.mit.edu>
+;; Maintainer: Qiantan Hong <qhong@alum.mit.edu>
 ;; Keywords: collaboration crdt
 ;; Version: 0.0.0
 ;;
