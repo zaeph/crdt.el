@@ -30,6 +30,12 @@
 
 ;;; Customs
 
+(require 'cl-lib)
+(require 'subr-x)
+(require 'url)
+(require 'color)
+(require 'files)
+
 (defgroup crdt nil
   "Collaborative editing using Conflict-free Replicated Data Types."
   :prefix "crdt-"
@@ -54,8 +60,6 @@
 (defvar crdt--log-network-traffic nil
   "Debug switch to log network traffic to *Messages*.")
 
-(require 'files)
-
 (defcustom crdt-tuntox-executable (executable-find "tuntox")
   "Path to the tuntox binary."
   :type 'file)
@@ -68,13 +72,7 @@
   "Start tuntox proxy for CRDT servers."
   :type '(choice boolean (const confirm)))
 
-(require 'cl-lib)
-(require 'subr-x)
-(require 'url)
-
 ;;; Pseudo cursor/region utils
-
-(require 'color)
 
 (defvar crdt-cursor-region-colors
   (let ((n 10))
