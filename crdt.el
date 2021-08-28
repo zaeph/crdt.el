@@ -61,7 +61,7 @@
 (defvar crdt--log-network-traffic nil
   "Debug switch to log network traffic to *Messages*.")
 
-(defcustom crdt-tuntox-executable (executable-find "tuntox")
+(defcustom crdt-tuntox-executable "tuntox"
   "Path to the tuntox binary."
   :type 'file)
 
