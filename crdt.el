@@ -30,6 +30,7 @@
 
 ;;; Customs
 
+(require 'xdg)
 (require 'cl-lib)
 (require 'subr-x)
 (require 'url)
@@ -64,7 +65,7 @@
   "Path to the tuntox binary."
   :type 'file)
 
-(defcustom crdt-tuntox-key-path (expand-file-name "~")
+(defcustom crdt-tuntox-key-path (xdg-data-home)
   "Path to save tuntox's private key."
   :type 'directory)
 
