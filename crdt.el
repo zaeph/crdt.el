@@ -384,17 +384,18 @@ Also set CRDT--PSEUDO-CURSOR-TABLE to NIL."
 (add-hook 'after-change-major-mode-hook #'crdt--after-change-major-mode)
 
 (define-minor-mode crdt-mode
-    "CRDT mode" nil " CRDT" nil
-    (if crdt-mode
-        (progn
-          (unless crdt--pseudo-cursor-table
-            (setq crdt--pseudo-cursor-table (make-hash-table)))
-          (unless crdt--overlay-table
-            (setq crdt--overlay-table (make-hash-table :test 'equal)))
-          (crdt--install-hooks))
-      (crdt--uninstall-hooks)
-      (crdt--clear-pseudo-cursor-table)
-      (setq crdt--overlay-table nil)))
+  "Mode for source collaborative buffers."
+  :lighter " CRDT"
+  (if crdt-mode
+      (progn
+        (unless crdt--pseudo-cursor-table
+          (setq crdt--pseudo-cursor-table (make-hash-table)))
+        (unless crdt--overlay-table
+          (setq crdt--overlay-table (make-hash-table :test 'equal)))
+        (crdt--install-hooks))
+    (crdt--uninstall-hooks)
+    (crdt--clear-pseudo-cursor-table)
+    (setq crdt--overlay-table nil)))
 
 ;;; Author visualization
 
@@ -412,12 +413,13 @@ Also set CRDT--PSEUDO-CURSOR-TABLE to NIL."
          (setq pos prev-pos))))))
 
 (define-minor-mode crdt-visualize-author-mode
-    "" nil " CRDT-VAuthor" nil
-    (if crdt-visualize-author-mode
-        (crdt--visualize-author)
-      (save-restriction
-        (widen)
-        (remove-list-of-text-properties (point-min) (point-max) '(font-lock-face)))))
+  "Minor mode to visualize who wrote what."
+  :lighter " CRDT-VAuthor"
+  (if crdt-visualize-author-mode
+      (crdt--visualize-author)
+    (save-restriction
+      (widen)
+      (remove-list-of-text-properties (point-min) (point-max) '(font-lock-face)))))
 
 ;;; Shared buffer utils
 
@@ -1975,8 +1977,9 @@ Join with DISPLAY-NAME."
 
 ;;; Org integration
 
-(define-minor-mode crdt-org-sync-overlay-mode ""
-  nil " Sync Org Overlay" nil
+(define-minor-mode crdt-org-sync-overlay-mode
+  "Minor mode to synchronize hidden `org-mode' subtrees."
+  :lighter " Sync Org Overlay"
   (if crdt-org-sync-overlay-mode
       (progn
         (save-excursion
