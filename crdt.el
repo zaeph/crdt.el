@@ -1045,10 +1045,12 @@ Always return a message otherwise."
               (overlays-in (point-max) (point-max))))
       (setq crdt--last-point point)
       (setq crdt--last-mark mark)
-      (let ((point-id-base64 (base64-encode-string (crdt--get-id point)))
-            (mark-id-base64 (when mark (base64-encode-string (crdt--get-id mark)))))
-        `(cursor ,crdt--buffer-network-name ,(crdt--session-local-id crdt--session)
-                 ,point ,point-id-base64 ,mark ,mark-id-base64)))))
+      (save-restriction
+        (widen)
+        (let ((point-id-base64 (base64-encode-string (crdt--get-id point)))
+              (mark-id-base64 (when mark (base64-encode-string (crdt--get-id mark)))))
+          `(cursor ,crdt--buffer-network-name ,(crdt--session-local-id crdt--session)
+                   ,point ,point-id-base64 ,mark ,mark-id-base64))))))
 
 (defun crdt--post-command ()
   "Post command hook used by CRDT-MODE.
@@ -1059,12 +1061,9 @@ Send message to other peers about any changes."
      (crdt--format-message `(focus ,(crdt--session-local-id crdt--session) ,crdt--buffer-network-name)))
     (setf (crdt--session-focused-buffer-name crdt--session) crdt--buffer-network-name)
     (crdt--refresh-users-maybe))
-  (save-restriction
-    (widen)
-    (let ((cursor-message (crdt--local-cursor)))
-      (when cursor-message
-        (crdt--broadcast-maybe (crdt--format-message cursor-message))))))
-
+  (let ((cursor-message (crdt--local-cursor)))
+    (when cursor-message
+      (crdt--broadcast-maybe (crdt--format-message cursor-message)))))
 
 ;;; CRDT ID (de)serialization
 
@@ -1183,58 +1182,60 @@ The overlay is FRONT-ADVANCE and REAR-ADVANCE, and lies between BEG and END."
   "Send messages to a client about the full state of BUFFER.
 The network process for the client connection is PROCESS."
   (with-current-buffer buffer
-    (process-send-string process
-                         (crdt--format-message
-                          `(sync
-                            ,crdt--buffer-network-name
-                            ,@ (crdt--dump-ids (point-min) (point-max) nil nil t))))
-    (process-send-string process (crdt--format-message `(ready ,crdt--buffer-network-name ,major-mode)))
+    (save-restriction
+      (widen)
+      (process-send-string process
+                           (crdt--format-message
+                            `(sync
+                              ,crdt--buffer-network-name
+                              ,@ (crdt--dump-ids (point-min) (point-max) nil nil t))))
+     (process-send-string process (crdt--format-message `(ready ,crdt--buffer-network-name ,major-mode)))
 
-    ;; synchronize cursor
-    (maphash (lambda (site-id ov-pair)
-               (cl-destructuring-bind (cursor-ov . region-ov) ov-pair
-                 (let* ((point (overlay-start cursor-ov))
-                        (region-beg (overlay-start region-ov))
-                        (region-end (overlay-end region-ov))
-                        (mark (if (eq point region-beg)
-                                  (unless (eq point region-end) region-end)
-                                region-beg))
-                        (point-id-base64 (base64-encode-string (crdt--get-id point)))
-                        (mark-id-base64 (when mark (base64-encode-string (crdt--get-id mark)))))
-                   (process-send-string process
-                                        (crdt--format-message
-                                         `(cursor ,crdt--buffer-network-name ,site-id
-                                                  ,point ,point-id-base64 ,mark ,mark-id-base64))))))
-             crdt--pseudo-cursor-table)
-    (process-send-string process (crdt--format-message (crdt--local-cursor nil)))
+     ;; synchronize cursor
+     (maphash (lambda (site-id ov-pair)
+                (cl-destructuring-bind (cursor-ov . region-ov) ov-pair
+                  (let* ((point (overlay-start cursor-ov))
+                         (region-beg (overlay-start region-ov))
+                         (region-end (overlay-end region-ov))
+                         (mark (if (eq point region-beg)
+                                   (unless (eq point region-end) region-end)
+                                 region-beg))
+                         (point-id-base64 (base64-encode-string (crdt--get-id point)))
+                         (mark-id-base64 (when mark (base64-encode-string (crdt--get-id mark)))))
+                    (process-send-string process
+                                         (crdt--format-message
+                                          `(cursor ,crdt--buffer-network-name ,site-id
+                                                   ,point ,point-id-base64 ,mark ,mark-id-base64))))))
+              crdt--pseudo-cursor-table)
+     (process-send-string process (crdt--format-message (crdt--local-cursor nil)))
 
-    ;; synchronize tracked overlay
-    (maphash (lambda (k ov)
-               (let ((meta (overlay-get ov 'crdt-meta)))
-                 (process-send-string
-                  process
-                  (crdt--format-message (crdt--overlay-add-message
-                                         (car k) (cdr k)
-                                         (crdt--overlay-metadata-species meta)
-                                         (crdt--overlay-metadata-front-advance meta)
-                                         (crdt--overlay-metadata-rear-advance meta)
-                                         (overlay-start ov)
-                                         (overlay-end ov))))
-                 (cl-loop for (prop value) on (crdt--overlay-metadata-plist meta) by #'cddr
-                       do (process-send-string
-                           process
-                           (crdt--format-message `(overlay-put ,crdt--buffer-network-name
-                                                               ,(car k) ,(cdr k) ,prop ,value))))))
-             crdt--overlay-table)
+     ;; synchronize tracked overlay
+     (maphash (lambda (k ov)
+                (let ((meta (overlay-get ov 'crdt-meta)))
+                  (process-send-string
+                   process
+                   (crdt--format-message (crdt--overlay-add-message
+                                          (car k) (cdr k)
+                                          (crdt--overlay-metadata-species meta)
+                                          (crdt--overlay-metadata-front-advance meta)
+                                          (crdt--overlay-metadata-rear-advance meta)
+                                          (overlay-start ov)
+                                          (overlay-end ov))))
+                  (cl-loop for (prop value) on (crdt--overlay-metadata-plist meta) by #'cddr
+                        do (process-send-string
+                            process
+                            (crdt--format-message `(overlay-put ,crdt--buffer-network-name
+                                                                ,(car k) ,(cdr k) ,prop ,value))))))
+              crdt--overlay-table)
 
-    ;; synchronize process marker if there's any
-    (let ((buffer-process (get-buffer-process buffer)))
-      (when buffer-process
-        (let ((mark-pos (marker-position (process-mark buffer-process))))
-          (process-send-string process
-                               (crdt--format-message
-                                `(process-mark ,crdt--buffer-network-name
-                                               ,(crdt--get-id mark-pos) ,mark-pos))))))))
+     ;; synchronize process marker if there's any
+     (let ((buffer-process (get-buffer-process buffer)))
+       (when buffer-process
+         (let ((mark-pos (marker-position (process-mark buffer-process))))
+           (process-send-string process
+                                (crdt--format-message
+                                 `(process-mark ,crdt--buffer-network-name
+                                                ,(crdt--get-id mark-pos) ,mark-pos)))))))))
 
 (defun crdt--greet-client (process)
   "Send initial information when a client connects.
