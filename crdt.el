@@ -348,21 +348,22 @@ Each element is of the form (CURSOR-OVERLAY . REGION-OVERLAY).")
 
 ;;; crdt-mode
 
+(defvar crdt--hooks-alist
+  '((after-change-functions . crdt--after-change)
+    (before-change-functions . crdt--before-change)
+    (post-command-hook . crdt--post-command)
+    (deactivate-mark-hook . crdt--post-command)
+    (kill-buffer-hook . crdt--kill-buffer-hook)))
+
 (defun crdt--install-hooks ()
   "Install the hooks used by CRDT-MODE."
-  (add-hook 'after-change-functions #'crdt--after-change nil t)
-  (add-hook 'before-change-functions #'crdt--before-change nil t)
-  (add-hook 'post-command-hook #'crdt--post-command nil t)
-  (add-hook 'deactivate-mark-hook #'crdt--post-command nil t)
-  (add-hook 'kill-buffer-hook #'crdt--kill-buffer-hook nil t))
+  (dolist (pair crdt--hooks-alist)
+    (add-hook (car pair) (cdr pair) nil t)))
 
 (defun crdt--uninstall-hooks ()
   "Uninstall the hooks used by CRDT-MODE."
-  (remove-hook 'after-change-functions #'crdt--after-change t)
-  (remove-hook 'before-change-functions #'crdt--before-change t)
-  (remove-hook 'post-command-hook #'crdt--post-command t)
-  (remove-hook 'deactivate-mark-hook #'crdt--post-command t)
-  (remove-hook 'kill-buffer-hook #'crdt--kill-buffer-hook t))
+  (dolist (pair crdt--hooks-alist)
+    (remove-hook (car pair) (cdr pair) t)))
 
 (defsubst crdt--clear-pseudo-cursor-table ()
   "Remove all overlays in CRDT--PSEUDO-CURSOR-TABLE.
@@ -2119,14 +2120,12 @@ Join with DISPLAY-NAME."
 (defun crdt--install-process-advices ()
   "Globally enable advices for simulating remote buffer process.
 We don't install them by default because those advices sometimes seem to interfere with other packages."
-  (mapcar (lambda (pair)
-            (advice-add (car pair) :around (cdr pair)))
-          crdt--process-advice-alist))
+  (dolist (pair crdt--process-advice-alist)
+    (advice-add (car pair) :around (cdr pair))))
 
 (defun crdt--uninstall-process-advices ()
-  (mapcar (lambda (pair)
-            (advice-remove (car pair) (cdr pair)))
-          crdt--process-advice-alist))
+  (dolist (pair crdt--process-advice-alist)
+    (advice-remove (car pair) (cdr pair))))
 
 (cl-defmethod crdt-process-message ((message (head process)) _process)
   (cl-destructuring-bind (buffer-name string) (cdr message)
