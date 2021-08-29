@@ -436,6 +436,7 @@ If SESSION is nil, use current CRDT--SESSION."
 
 (defmacro crdt--with-buffer-name (name &rest body)
   "Find CRDT shared buffer associated with NAME and evaluate BODY in it.
+Any narrowing is temporarily disabled during evaluation of BODY.
 Also, try to recover from synchronization error if any error happens in BODY.
 Must be called when CURRENT-BUFFER is a CRDT status buffer.
 If such buffer doesn't exist yet, do nothing."
@@ -444,11 +445,13 @@ If such buffer doesn't exist yet, do nothing."
      (setq crdt-buffer (gethash ,name (crdt--session-buffer-table crdt--session)))
      (when (and crdt-buffer (buffer-live-p crdt-buffer))
        (with-current-buffer crdt-buffer
-         (condition-case err
-             ,(cons 'progn body)
-           (error (if (crdt--server-p)
-                      (signal (car err) (cdr err)) ; didn't implement server side recovery yet
-                    (crdt--client-recover))))))))
+         (save-restriction
+           (widen)
+           (condition-case err
+               ,(cons 'progn body)
+             (error (if (crdt--server-p)
+                        (signal (car err) (cdr err)) ; didn't implement server side recovery yet
+                      (crdt--client-recover)))))))))
 
 (defmacro crdt--with-buffer-name-pull (name &rest body)
   "Find CRDT shared buffer associated with NAME and evaluate BODY in it.
@@ -1056,9 +1059,11 @@ Send message to other peers about any changes."
      (crdt--format-message `(focus ,(crdt--session-local-id crdt--session) ,crdt--buffer-network-name)))
     (setf (crdt--session-focused-buffer-name crdt--session) crdt--buffer-network-name)
     (crdt--refresh-users-maybe))
-  (let ((cursor-message (crdt--local-cursor)))
-    (when cursor-message
-      (crdt--broadcast-maybe (crdt--format-message cursor-message)))))
+  (save-restriction
+    (widen)
+    (let ((cursor-message (crdt--local-cursor)))
+      (when cursor-message
+        (crdt--broadcast-maybe (crdt--format-message cursor-message))))))
 
 
 ;;; CRDT ID (de)serialization
