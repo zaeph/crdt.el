@@ -1,4 +1,4 @@
-;;; crdt.el --- collaborative editing using Conflict-free Replicated Data Types  -*- lexical-binding: t; -*-
+;;; crdt.el --- Collaborative editing using Conflict-free Replicated Data Types  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2021 Free Software Foundation, Inc.
 
@@ -6,7 +6,7 @@
 ;; Maintainer: Qiantan Hong <qhong@alum.mit.edu>
 ;; URL: https://code.librehq.com/qhong/crdt.el
 ;; Keywords: collaboration crdt
-;; Version: 0.1.1
+;; Version: 0.1.2
 
 ;; This file is part of GNU Emacs.
 
