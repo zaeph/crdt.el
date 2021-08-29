@@ -1,4 +1,4 @@
-;;; crdt.el --- collaborative editing using Conflict-free Replicated Data Types  -*- lexical-binding: t; -*-
+;;; crdt.el --- Collaborative editing using Conflict-free Replicated Data Types  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2021 Free Software Foundation, Inc.
 
@@ -6,7 +6,7 @@
 ;; Maintainer: Qiantan Hong <qhong@alum.mit.edu>
 ;; URL: https://code.librehq.com/qhong/crdt.el
 ;; Keywords: collaboration crdt
-;; Version: 0.1.1
+;; Version: 0.1.2
 
 ;; This file is part of GNU Emacs.
 
@@ -962,20 +962,21 @@ update the CRDT-ID for any newly inserted text, and send message to other peers 
         ;; we're only interested in text change
         ;; ignore property only changes
         (save-excursion
-          (goto-char beg)
-          (if (and (= length (- end beg))
-                   (string-equal (crdt--changed-string beg length)
-                                 (buffer-substring-no-properties beg end)))
-              (crdt--crdt-id-assimilate (crdt--changed-string beg length) beg)
-            (widen)
-            (with-silent-modifications
-              (unless (= length 0)
-                (crdt--broadcast-maybe
-                 (crdt--format-message (crdt--local-delete beg end length))))
-              (unless (= beg end)
-                (dolist (message (crdt--local-insert beg end))
+          (save-restriction
+            (goto-char beg)
+            (if (and (= length (- end beg))
+                     (string-equal (crdt--changed-string beg length)
+                                   (buffer-substring-no-properties beg end)))
+                (crdt--crdt-id-assimilate (crdt--changed-string beg length) beg)
+              (widen)
+              (with-silent-modifications
+                (unless (= length 0)
                   (crdt--broadcast-maybe
-                   (crdt--format-message message)))))))
+                   (crdt--format-message (crdt--local-delete beg end length))))
+                (unless (= beg end)
+                  (dolist (message (crdt--local-insert beg end))
+                    (crdt--broadcast-maybe
+                     (crdt--format-message message))))))))
         ;; process-mark synchronization is dependent on correct CRDT-ID
         ;; therefore we must do it after the insert/change stuff is done
         (crdt--send-process-mark-maybe)
@@ -1512,13 +1513,14 @@ SESSION-NAME if provided is used in the prompt."
         (setq crdt--buffer-network-name (buffer-name buffer))
         (crdt-mode)
         (save-excursion
-          (widen)
-          (let ((crdt--inhibit-update t))
-            (with-silent-modifications
-              (crdt--local-insert (point-min) (point-max))))
-          (crdt--broadcast-maybe
-           (crdt--format-message `(add
-                                   ,crdt--buffer-network-name))))
+          (save-restriction
+            (widen)
+            (let ((crdt--inhibit-update t))
+              (with-silent-modifications
+                (crdt--local-insert (point-min) (point-max))))
+            (crdt--broadcast-maybe
+             (crdt--format-message `(add
+                                     ,crdt--buffer-network-name)))))
         (add-hook 'kill-buffer-hook #'crdt-stop-share-buffer nil t)
         (crdt--refresh-buffers-maybe)
         (crdt--refresh-sessions-maybe))
@@ -1974,12 +1976,13 @@ Join with DISPLAY-NAME."
   (if crdt-org-sync-overlay-mode
       (progn
         (save-excursion
-          (widen)
-          ;; heuristic to remove existing org overlays
-          (cl-loop for ov in (overlays-in (point-min) (point-max))
-                do (when (memq (overlay-get ov 'invisible)
-                               '(outline org-hide-block))
-                     (delete-overlay ov))))
+          (save-restriction
+            (widen)
+            ;; heuristic to remove existing org overlays
+            (cl-loop for ov in (overlays-in (point-min) (point-max))
+                  do (when (memq (overlay-get ov 'invisible)
+                                 '(outline org-hide-block))
+                       (delete-overlay ov)))))
         (crdt--enable-overlay-species 'org))
     (crdt--disable-overlay-species 'org)))
 
