@@ -148,7 +148,7 @@ Synchronize arbitrary buffer-local-variable reasonably is hard, but user annotat
    - [-] synchronize major/minor modes
      + [X] initial synchronization of major modes
      + [ ] toggle minor modes on the fly
-     + [ ] change major modes on the fly
+     + [X] change major modes on the fly
    - [ ] set of synchronization primitives for buffer local variables
      + [ ] server dictated
      + [ ] a library of CRDTs
