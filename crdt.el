@@ -30,12 +30,10 @@
 
 ;;; Customs
 
-(require 'xdg)
+(require 'xdg nil t)
 (require 'cl-lib)
-(require 'subr-x)
 (require 'url)
 (require 'color)
-(require 'files)
 
 (defgroup crdt nil
   "Collaborative editing using Conflict-free Replicated Data Types."
@@ -65,7 +63,7 @@
   "Path to the tuntox binary."
   :type 'file)
 
-(defcustom crdt-tuntox-key-path (xdg-data-home)
+(defcustom crdt-tuntox-key-path (if (featurep 'xdg) (xdg-data-home) "~/")
   "Path to save tuntox's private key."
   :type 'directory)
 
@@ -1636,7 +1634,7 @@ Setup up the server with PASSWORD and assign this Emacs DISPLAY-NAME."
                              :buffer (generate-new-buffer "*Tuntox Proxy*")
                              :command
                              `(,crdt-tuntox-executable
-                               "-C" ,crdt-tuntox-key-path
+                               "-C" ,(expand-file-name crdt-tuntox-key-path)
                                "-f" "/dev/stdin" ; do the filtering for safety sake
                                ,@ (when (and password (> (length password) 0))
                                     `("-s" ,password))))))
