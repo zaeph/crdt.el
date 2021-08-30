@@ -404,17 +404,29 @@ Also set CRDT--PSEUDO-CURSOR-TABLE to NIL."
 ;;; Author visualization
 
 (defsubst crdt--visualize-author-1 (beg end site)
-  (put-text-property beg end
-                     'font-lock-face `(:underline ,(crdt--get-cursor-color site))))
+  (remove-overlays beg end 'category 'crdt-visualize-author)
+  (cl-flet ((ov-alike-p (ov)
+              (and (eq (overlay-get ov 'category) 'crdt-visualize-author)
+                   (eq (overlay-get ov 'crdt-site) site))))
+    (or
+     (let ((ov-front (cl-find-if #'ov-alike-p (overlays-at (1- beg)))))
+       (when ov-front (move-overlay ov-front (overlay-start ov-front) end) t))
+     (let ((ov-rear (cl-find-if #'ov-alike-p (overlays-at end))))
+       (when ov-rear (move-overlay ov-rear beg (overlay-end ov-rear)) t))
+     (let ((new-ov (make-overlay beg end nil t nil)))
+       (overlay-put new-ov 'category 'crdt-visualize-author)
+       (overlay-put new-ov 'crdt-site site)
+       (overlay-put new-ov 'face `(:underline ,(crdt--get-cursor-color site)))))))
+
 (defun crdt--visualize-author ()
   (save-restriction
     (widen)
     (let ((pos (point-max)))
-     (while (> pos (point-min))
-       (let* ((prev-pos (previous-single-property-change pos 'crdt-id nil (point-min)))
-              (crdt-id (car-safe (crdt--get-crdt-id-pair prev-pos))))
-         (when crdt-id (crdt--visualize-author-1 prev-pos pos (crdt--id-site crdt-id)))
-         (setq pos prev-pos))))))
+      (while (> pos (point-min))
+        (let* ((prev-pos (previous-single-property-change pos 'crdt-id nil (point-min)))
+               (crdt-id (car-safe (crdt--get-crdt-id-pair prev-pos))))
+          (when crdt-id (crdt--visualize-author-1 prev-pos pos (crdt--id-site crdt-id)))
+          (setq pos prev-pos))))))
 
 (define-minor-mode crdt-visualize-author-mode
   "Minor mode to visualize who wrote what."
@@ -423,7 +435,7 @@ Also set CRDT--PSEUDO-CURSOR-TABLE to NIL."
       (crdt--visualize-author)
     (save-restriction
       (widen)
-      (remove-list-of-text-properties (point-min) (point-max) '(font-lock-face)))))
+      (remove-overlays (point-min) (point-max) 'category 'crdt-visualize-author))))
 
 ;;; Shared buffer utils
 
@@ -858,7 +870,9 @@ Start the search around POSITION-HINT."
         (crdt--visualize-author-1 beg end (crdt--id-site id)))
       ;; work around for input method overlays
       (cl-loop for ov in (overlays-at beg)
-            do (unless (overlay-get ov 'crdt-meta)
+            do (unless (or (overlay-get ov 'crdt-meta)
+                           (memq (overlay-get ov 'category)
+                                 '(crdt-visualize-author crdt-pseudo-cursor)))
                  (when (eq (overlay-start ov) beg)
                    (move-overlay ov end (overlay-end ov)))))
       (with-silent-modifications
