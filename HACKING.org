@@ -142,7 +142,7 @@ By implementing synchronization primitives for all components in a buffer,
 pretty much everything can be made collaborative.
 Synchronize arbitrary buffer-local-variable reasonably is hard, but user annotations can help.
 
-** TODO list
+** TODO task list
    - [X] synchronize buffer text (insert/delete)
    - [X] synchronize overlays
    - [-] synchronize major/minor modes
@@ -154,3 +154,50 @@ Synchronize arbitrary buffer-local-variable reasonably is hard, but user annotat
      + [ ] a library of CRDTs
    - [ ] synchronize text properties (any use case for this?)
    - [ ] synchronize markers (any use case for this?)
+
+* TODO Cross-editor support
+
+The current plan is to reuse the Emacs implementation as a local server for any other editor, aka Emacs as a service. 
+The benefit is that we don't need to reimplement the sophiscated CRDT algorithm in other +uncivilized+ environments. 
+We then just need to design a thin protocol that communicate between local Emacs and the other editor.
+Since this protocol communicate only locally, the latency should be negligible, 
+therefore we use a blocking reader/writer lock based synchronization scheme.
+
+** Bridge protocol
+
+   - Reader/writer lock
+     + aquire :: body takes the form =()=
+     + release :: body takes the form =()=
+
+   The rest is mostly analogue to the primary protocol for Emacsen, 
+   except that CRDT IDs are replaced by explicit integer position (start from 1, as in Emacs).
+
+  - Text Editing
+    + insert :: body takes the form =(buffer-name position content)=
+    + delete :: body takes the form =(buffer-name position length)=
+
+  - Peer State
+    + cursor :: body takes the form =(buffer-name site-id point-position mark-position)=
+      =*-position= can be either an integer, or
+        - =nil=, which means clear the point/mark
+
+    + contact :: same as primary protocol.
+
+    + focus :: same as primary protocol.
+
+  - Login
+    Note that we don't include challenge/response authentication mecahnism.
+
+    + hello :: same as primary protocol.
+    + leave :: same as primary protocol.
+
+    + login :: same as primary protocol.
+
+  - Initial Synchronization
+    + sync :: body takes the form =(buffer-name content-string)=
+    + ready :: same as primary protocol.
+
+  - Buffer Service
+    + add :: same as primary protocol.
+    + remove :: same as primary protocol.
+    + get :: same as primary protocol.
