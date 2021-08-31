@@ -351,7 +351,9 @@ Each element is of the form (CURSOR-OVERLAY . REGION-OVERLAY).")
     (before-change-functions . crdt--before-change)
     (post-command-hook . crdt--post-command)
     (deactivate-mark-hook . crdt--post-command)
-    (kill-buffer-hook . crdt--kill-buffer-hook)))
+    (kill-buffer-hook . crdt--kill-buffer-hook)
+    (clone-buffer-hook . crdt--clone-buffer-hook)
+    (clone-indirect-buffer-hook . crdt--clone-buffer-hook)))
 
 (defun crdt--install-hooks ()
   "Install the hooks used by CRDT-MODE."
@@ -398,6 +400,9 @@ Also set CRDT--PSEUDO-CURSOR-TABLE to NIL."
     (crdt--uninstall-hooks)
     (crdt--clear-pseudo-cursor-table)
     (setq crdt--overlay-table nil)))
+
+(defun crdt--clone-buffer-hook ()
+  (crdt-mode -1))
 
 ;;; Author visualization
 
