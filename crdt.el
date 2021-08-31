@@ -6,7 +6,7 @@
 ;; Maintainer: Qiantan Hong <qhong@alum.mit.edu>
 ;; URL: https://code.librehq.com/qhong/crdt.el
 ;; Keywords: collaboration crdt
-;; Version: 0.1.2
+;; Version: 0.1.3
 
 ;; This file is part of GNU Emacs.
 
@@ -30,12 +30,10 @@
 
 ;;; Customs
 
-(require 'xdg)
+(require 'xdg nil t)
 (require 'cl-lib)
-(require 'subr-x)
 (require 'url)
 (require 'color)
-(require 'files)
 
 (defgroup crdt nil
   "Collaborative editing using Conflict-free Replicated Data Types."
@@ -65,7 +63,7 @@
   "Path to the tuntox binary."
   :type 'file)
 
-(defcustom crdt-tuntox-key-path (xdg-data-home)
+(defcustom crdt-tuntox-key-path (if (featurep 'xdg) (xdg-data-home) "~/")
   "Path to save tuntox's private key."
   :type 'directory)
 
@@ -353,7 +351,9 @@ Each element is of the form (CURSOR-OVERLAY . REGION-OVERLAY).")
     (before-change-functions . crdt--before-change)
     (post-command-hook . crdt--post-command)
     (deactivate-mark-hook . crdt--post-command)
-    (kill-buffer-hook . crdt--kill-buffer-hook)))
+    (kill-buffer-hook . crdt--kill-buffer-hook)
+    (clone-buffer-hook . crdt--clone-buffer-hook)
+    (clone-indirect-buffer-hook . crdt--clone-buffer-hook)))
 
 (defun crdt--install-hooks ()
   "Install the hooks used by CRDT-MODE."
@@ -400,6 +400,9 @@ Also set CRDT--PSEUDO-CURSOR-TABLE to NIL."
     (crdt--uninstall-hooks)
     (crdt--clear-pseudo-cursor-table)
     (setq crdt--overlay-table nil)))
+
+(defun crdt--clone-buffer-hook ()
+  (crdt-mode -1))
 
 ;;; Author visualization
 
@@ -1636,7 +1639,7 @@ Setup up the server with PASSWORD and assign this Emacs DISPLAY-NAME."
                              :buffer (generate-new-buffer "*Tuntox Proxy*")
                              :command
                              `(,crdt-tuntox-executable
-                               "-C" ,crdt-tuntox-key-path
+                               "-C" ,(expand-file-name crdt-tuntox-key-path)
                                "-f" "/dev/stdin" ; do the filtering for safety sake
                                ,@ (when (and password (> (length password) 0))
                                     `("-s" ,password))))))
