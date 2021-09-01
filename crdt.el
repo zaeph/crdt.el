@@ -1494,7 +1494,6 @@ Handle received STRING from PROCESS."
       ;; client disconnected
       (setf (crdt--session-network-clients crdt--session)
             (delq client (crdt--session-network-clients crdt--session)))
-      (when (process-buffer client) (kill-buffer (process-buffer client)))
       ;; generate a clear cursor message and a clear contact message
       (let* ((client-id (process-get client 'client-id))
              (clear-contact-message `(contact ,client-id nil)))
@@ -1505,7 +1504,8 @@ Handle received STRING from PROCESS."
             `(cursor ,k ,client-id 1 nil 1 nil)
             client))
          (crdt--session-buffer-table crdt--session))
-        (crdt--refresh-users-maybe)))))
+        (crdt--refresh-users-maybe))
+      (when (process-buffer client) (kill-buffer (process-buffer client))))))
 
 (defun crdt--client-process-sentinel (process _message)
   (unless (eq (process-status process) 'open)
