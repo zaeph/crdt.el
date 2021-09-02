@@ -69,7 +69,7 @@ and second last two bytes represent site ID.
   - Initial Synchronization
     + sync ::
       This message is sent from server to client to get it sync to the state on the server.
-      Might be used for error recovery or other optimization in the future.
+      Might be used for other optimization in the future.
       One optimization I have in mind is let server try to merge all CRDT item into a single
       one and try to synchronize this state to clients at best effort.
       body takes the form =(buffer-name . crdt-id-list)=
@@ -82,6 +82,16 @@ and second last two bytes represent site ID.
       and some =overlay-*= messages).
       The client should now try to enable =major-mode-symbol= in the
       synchronized buffer.
+
+  - Error Recovery
+    Note: when a client side error happens, it just sends a =get= message and
+    follow initial synchronization procedure to reinitialize the buffer.
+
+    + error ::
+      body takes the form =(buffer-name error-symbol . error-datum)=.
+      This message is sent from server to client to notice that some messages from the
+      client is not processed due to error =(error-symbol . error-datum)=.
+      Normally client should follow initial synchronization procedure to reinitialize the buffer.
 
   - Buffer Service
     + add ::

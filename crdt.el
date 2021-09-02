@@ -30,12 +30,10 @@
 
 ;;; Customs
 
-(require 'xdg)
+(require 'xdg nil t)
 (require 'cl-lib)
-(require 'subr-x)
 (require 'url)
 (require 'color)
-(require 'files)
 
 (defgroup crdt nil
   "Collaborative editing using Conflict-free Replicated Data Types."
@@ -65,7 +63,7 @@
   "Path to the tuntox binary."
   :type 'file)
 
-(defcustom crdt-tuntox-key-path (xdg-data-home)
+(defcustom crdt-tuntox-key-path (if (featurep 'xdg) (xdg-data-home) "~/")
   "Path to save tuntox's private key."
   :type 'directory)
 
@@ -346,23 +344,29 @@ Each element is of the form (CURSOR-OVERLAY . REGION-OVERLAY).")
 
 (defvar crdt--session-menu-buffer nil)
 
+(defvar crdt--process nil
+  "Temporarily bound to the current network process when processing messages inside CRDT--NETWORK-FILTER.")
+
 ;;; crdt-mode
+
+(defvar crdt--hooks-alist
+  '((after-change-functions . crdt--after-change)
+    (before-change-functions . crdt--before-change)
+    (post-command-hook . crdt--post-command)
+    (deactivate-mark-hook . crdt--post-command)
+    (kill-buffer-hook . crdt--kill-buffer-hook)
+    (clone-buffer-hook . crdt--clone-buffer-hook)
+    (clone-indirect-buffer-hook . crdt--clone-buffer-hook)))
 
 (defun crdt--install-hooks ()
   "Install the hooks used by CRDT-MODE."
-  (add-hook 'after-change-functions #'crdt--after-change nil t)
-  (add-hook 'before-change-functions #'crdt--before-change nil t)
-  (add-hook 'post-command-hook #'crdt--post-command nil t)
-  (add-hook 'deactivate-mark-hook #'crdt--post-command nil t)
-  (add-hook 'kill-buffer-hook #'crdt--kill-buffer-hook nil t))
+  (dolist (pair crdt--hooks-alist)
+    (add-hook (car pair) (cdr pair) nil t)))
 
 (defun crdt--uninstall-hooks ()
   "Uninstall the hooks used by CRDT-MODE."
-  (remove-hook 'after-change-functions #'crdt--after-change t)
-  (remove-hook 'before-change-functions #'crdt--before-change t)
-  (remove-hook 'post-command-hook #'crdt--post-command t)
-  (remove-hook 'deactivate-mark-hook #'crdt--post-command t)
-  (remove-hook 'kill-buffer-hook #'crdt--kill-buffer-hook t))
+  (dolist (pair crdt--hooks-alist)
+    (remove-hook (car pair) (cdr pair) t)))
 
 (defsubst crdt--clear-pseudo-cursor-table ()
   "Remove all overlays in CRDT--PSEUDO-CURSOR-TABLE.
@@ -400,20 +404,35 @@ Also set CRDT--PSEUDO-CURSOR-TABLE to NIL."
     (crdt--clear-pseudo-cursor-table)
     (setq crdt--overlay-table nil)))
 
+(defun crdt--clone-buffer-hook ()
+  (crdt-mode -1))
+
 ;;; Author visualization
 
 (defsubst crdt--visualize-author-1 (beg end site)
-  (put-text-property beg end
-                     'font-lock-face `(:underline ,(crdt--get-cursor-color site))))
+  (remove-overlays beg end 'category 'crdt-visualize-author)
+  (cl-flet ((ov-alike-p (ov)
+              (and (eq (overlay-get ov 'category) 'crdt-visualize-author)
+                   (eq (overlay-get ov 'crdt-site) site))))
+    (or
+     (let ((ov-front (cl-find-if #'ov-alike-p (overlays-at (1- beg)))))
+       (when ov-front (move-overlay ov-front (overlay-start ov-front) end) t))
+     (let ((ov-rear (cl-find-if #'ov-alike-p (overlays-at end))))
+       (when ov-rear (move-overlay ov-rear beg (overlay-end ov-rear)) t))
+     (let ((new-ov (make-overlay beg end nil t nil)))
+       (overlay-put new-ov 'category 'crdt-visualize-author)
+       (overlay-put new-ov 'crdt-site site)
+       (overlay-put new-ov 'face `(:underline ,(crdt--get-cursor-color site)))))))
+
 (defun crdt--visualize-author ()
   (save-restriction
     (widen)
     (let ((pos (point-max)))
-     (while (> pos (point-min))
-       (let* ((prev-pos (previous-single-property-change pos 'crdt-id nil (point-min)))
-              (crdt-id (car-safe (crdt--get-crdt-id-pair prev-pos))))
-         (when crdt-id (crdt--visualize-author-1 prev-pos pos (crdt--id-site crdt-id)))
-         (setq pos prev-pos))))))
+      (while (> pos (point-min))
+        (let* ((prev-pos (previous-single-property-change pos 'crdt-id nil (point-min)))
+               (crdt-id (car-safe (crdt--get-crdt-id-pair prev-pos))))
+          (when crdt-id (crdt--visualize-author-1 prev-pos pos (crdt--id-site crdt-id)))
+          (setq pos prev-pos))))))
 
 (define-minor-mode crdt-visualize-author-mode
   "Minor mode to visualize who wrote what."
@@ -422,7 +441,7 @@ Also set CRDT--PSEUDO-CURSOR-TABLE to NIL."
       (crdt--visualize-author)
     (save-restriction
       (widen)
-      (remove-list-of-text-properties (point-min) (point-max) '(font-lock-face)))))
+      (remove-overlays (point-min) (point-max) 'category 'crdt-visualize-author))))
 
 ;;; Shared buffer utils
 
@@ -436,6 +455,7 @@ If SESSION is nil, use current CRDT--SESSION."
 
 (defmacro crdt--with-buffer-name (name &rest body)
   "Find CRDT shared buffer associated with NAME and evaluate BODY in it.
+Any narrowing is temporarily disabled during evaluation of BODY.
 Also, try to recover from synchronization error if any error happens in BODY.
 Must be called when CURRENT-BUFFER is a CRDT status buffer.
 If such buffer doesn't exist yet, do nothing."
@@ -444,11 +464,11 @@ If such buffer doesn't exist yet, do nothing."
      (setq crdt-buffer (gethash ,name (crdt--session-buffer-table crdt--session)))
      (when (and crdt-buffer (buffer-live-p crdt-buffer))
        (with-current-buffer crdt-buffer
-         (condition-case err
-             ,(cons 'progn body)
-           (error (if (crdt--server-p)
-                      (signal (car err) (cdr err)) ; didn't implement server side recovery yet
-                    (crdt--client-recover))))))))
+         (save-restriction
+           (widen)
+           (condition-case err
+               ,(cons 'progn body)
+             (error (crdt--recover err))))))))
 
 (defmacro crdt--with-buffer-name-pull (name &rest body)
   "Find CRDT shared buffer associated with NAME and evaluate BODY in it.
@@ -854,7 +874,9 @@ Start the search around POSITION-HINT."
         (crdt--visualize-author-1 beg end (crdt--id-site id)))
       ;; work around for input method overlays
       (cl-loop for ov in (overlays-at beg)
-            do (unless (overlay-get ov 'crdt-meta)
+            do (unless (or (overlay-get ov 'crdt-meta)
+                           (memq (overlay-get ov 'category)
+                                 '(crdt-visualize-author crdt-pseudo-cursor)))
                  (when (eq (overlay-start ov) beg)
                    (move-overlay ov end (overlay-end ov)))))
       (with-silent-modifications
@@ -962,20 +984,21 @@ update the CRDT-ID for any newly inserted text, and send message to other peers 
         ;; we're only interested in text change
         ;; ignore property only changes
         (save-excursion
-          (goto-char beg)
-          (if (and (= length (- end beg))
-                   (string-equal (crdt--changed-string beg length)
-                                 (buffer-substring-no-properties beg end)))
-              (crdt--crdt-id-assimilate (crdt--changed-string beg length) beg)
-            (widen)
-            (with-silent-modifications
-              (unless (= length 0)
-                (crdt--broadcast-maybe
-                 (crdt--format-message (crdt--local-delete beg end length))))
-              (unless (= beg end)
-                (dolist (message (crdt--local-insert beg end))
+          (save-restriction
+            (goto-char beg)
+            (if (and (= length (- end beg))
+                     (string-equal (crdt--changed-string beg length)
+                                   (buffer-substring-no-properties beg end)))
+                (crdt--crdt-id-assimilate (crdt--changed-string beg length) beg)
+              (widen)
+              (with-silent-modifications
+                (unless (= length 0)
                   (crdt--broadcast-maybe
-                   (crdt--format-message message)))))))
+                   (crdt--format-message (crdt--local-delete beg end length))))
+                (unless (= beg end)
+                  (dolist (message (crdt--local-insert beg end))
+                    (crdt--broadcast-maybe
+                     (crdt--format-message message))))))))
         ;; process-mark synchronization is dependent on correct CRDT-ID
         ;; therefore we must do it after the insert/change stuff is done
         (crdt--send-process-mark-maybe)
@@ -1041,10 +1064,12 @@ Always return a message otherwise."
               (overlays-in (point-max) (point-max))))
       (setq crdt--last-point point)
       (setq crdt--last-mark mark)
-      (let ((point-id-base64 (base64-encode-string (crdt--get-id point)))
-            (mark-id-base64 (when mark (base64-encode-string (crdt--get-id mark)))))
-        `(cursor ,crdt--buffer-network-name ,(crdt--session-local-id crdt--session)
-                 ,point ,point-id-base64 ,mark ,mark-id-base64)))))
+      (save-restriction
+        (widen)
+        (let ((point-id-base64 (base64-encode-string (crdt--get-id point)))
+              (mark-id-base64 (when mark (base64-encode-string (crdt--get-id mark)))))
+          `(cursor ,crdt--buffer-network-name ,(crdt--session-local-id crdt--session)
+                   ,point ,point-id-base64 ,mark ,mark-id-base64))))))
 
 (defun crdt--post-command ()
   "Post command hook used by CRDT-MODE.
@@ -1058,7 +1083,6 @@ Send message to other peers about any changes."
   (let ((cursor-message (crdt--local-cursor)))
     (when cursor-message
       (crdt--broadcast-maybe (crdt--format-message cursor-message)))))
-
 
 ;;; CRDT ID (de)serialization
 
@@ -1115,14 +1139,25 @@ Verify that CRDT IDs in a document follows ascending order."
 
 ;;; Recovery
 
-(defun crdt--client-recover ()
-  "Try to recover from a synchronization failure from a client.
+(defun crdt--recover (&optional err)
+  "Try to recover from a synchronization failure.
 Current buffer is assmuned to be the one with synchronization error."
-  (ding)
-  (read-only-mode)
-  (message "Synchronization error detected, try recovering...")
-  (crdt--broadcast-maybe
-   (crdt--format-message `(get ,crdt--buffer-network-name))))
+  (if (crdt--server-p)
+      (progn
+        (let ((message (crdt--format-message `(error ,crdt--buffer-network-name ,@err))))
+          (condition-case nil
+              (read-from-string message)
+            (invalid-read-syntax
+             ;; (cdr err) must be unprintable, omit it for now
+             ;; maybe handle some objects in the future
+             ;; (e.g. represent buffer object with its name)
+             (setq message (crdt--format-message `(error ,crdt--buffer-network-name ,(car err))))))
+          (process-send-string crdt--process message)))
+    (ding)
+    (read-only-mode)
+    (message "Synchronization error detected, try recovering...")
+    (crdt--broadcast-maybe
+     (crdt--format-message `(get ,crdt--buffer-network-name)))))
 
 ;;; Network protocol
 
@@ -1177,58 +1212,60 @@ The overlay is FRONT-ADVANCE and REAR-ADVANCE, and lies between BEG and END."
   "Send messages to a client about the full state of BUFFER.
 The network process for the client connection is PROCESS."
   (with-current-buffer buffer
-    (process-send-string process
-                         (crdt--format-message
-                          `(sync
-                            ,crdt--buffer-network-name
-                            ,@ (crdt--dump-ids (point-min) (point-max) nil nil t))))
-    (process-send-string process (crdt--format-message `(ready ,crdt--buffer-network-name ,major-mode)))
+    (save-restriction
+      (widen)
+      (process-send-string process
+                           (crdt--format-message
+                            `(sync
+                              ,crdt--buffer-network-name
+                              ,@ (crdt--dump-ids (point-min) (point-max) nil nil t))))
+     (process-send-string process (crdt--format-message `(ready ,crdt--buffer-network-name ,major-mode)))
 
-    ;; synchronize cursor
-    (maphash (lambda (site-id ov-pair)
-               (cl-destructuring-bind (cursor-ov . region-ov) ov-pair
-                 (let* ((point (overlay-start cursor-ov))
-                        (region-beg (overlay-start region-ov))
-                        (region-end (overlay-end region-ov))
-                        (mark (if (eq point region-beg)
-                                  (unless (eq point region-end) region-end)
-                                region-beg))
-                        (point-id-base64 (base64-encode-string (crdt--get-id point)))
-                        (mark-id-base64 (when mark (base64-encode-string (crdt--get-id mark)))))
-                   (process-send-string process
-                                        (crdt--format-message
-                                         `(cursor ,crdt--buffer-network-name ,site-id
-                                                  ,point ,point-id-base64 ,mark ,mark-id-base64))))))
-             crdt--pseudo-cursor-table)
-    (process-send-string process (crdt--format-message (crdt--local-cursor nil)))
+     ;; synchronize cursor
+     (maphash (lambda (site-id ov-pair)
+                (cl-destructuring-bind (cursor-ov . region-ov) ov-pair
+                  (let* ((point (overlay-start cursor-ov))
+                         (region-beg (overlay-start region-ov))
+                         (region-end (overlay-end region-ov))
+                         (mark (if (eq point region-beg)
+                                   (unless (eq point region-end) region-end)
+                                 region-beg))
+                         (point-id-base64 (base64-encode-string (crdt--get-id point)))
+                         (mark-id-base64 (when mark (base64-encode-string (crdt--get-id mark)))))
+                    (process-send-string process
+                                         (crdt--format-message
+                                          `(cursor ,crdt--buffer-network-name ,site-id
+                                                   ,point ,point-id-base64 ,mark ,mark-id-base64))))))
+              crdt--pseudo-cursor-table)
+     (process-send-string process (crdt--format-message (crdt--local-cursor nil)))
 
-    ;; synchronize tracked overlay
-    (maphash (lambda (k ov)
-               (let ((meta (overlay-get ov 'crdt-meta)))
-                 (process-send-string
-                  process
-                  (crdt--format-message (crdt--overlay-add-message
-                                         (car k) (cdr k)
-                                         (crdt--overlay-metadata-species meta)
-                                         (crdt--overlay-metadata-front-advance meta)
-                                         (crdt--overlay-metadata-rear-advance meta)
-                                         (overlay-start ov)
-                                         (overlay-end ov))))
-                 (cl-loop for (prop value) on (crdt--overlay-metadata-plist meta) by #'cddr
-                       do (process-send-string
-                           process
-                           (crdt--format-message `(overlay-put ,crdt--buffer-network-name
-                                                               ,(car k) ,(cdr k) ,prop ,value))))))
-             crdt--overlay-table)
+     ;; synchronize tracked overlay
+     (maphash (lambda (k ov)
+                (let ((meta (overlay-get ov 'crdt-meta)))
+                  (process-send-string
+                   process
+                   (crdt--format-message (crdt--overlay-add-message
+                                          (car k) (cdr k)
+                                          (crdt--overlay-metadata-species meta)
+                                          (crdt--overlay-metadata-front-advance meta)
+                                          (crdt--overlay-metadata-rear-advance meta)
+                                          (overlay-start ov)
+                                          (overlay-end ov))))
+                  (cl-loop for (prop value) on (crdt--overlay-metadata-plist meta) by #'cddr
+                        do (process-send-string
+                            process
+                            (crdt--format-message `(overlay-put ,crdt--buffer-network-name
+                                                                ,(car k) ,(cdr k) ,prop ,value))))))
+              crdt--overlay-table)
 
-    ;; synchronize process marker if there's any
-    (let ((buffer-process (get-buffer-process buffer)))
-      (when buffer-process
-        (let ((mark-pos (marker-position (process-mark buffer-process))))
-          (process-send-string process
-                               (crdt--format-message
-                                `(process-mark ,crdt--buffer-network-name
-                                               ,(crdt--get-id mark-pos) ,mark-pos))))))))
+     ;; synchronize process marker if there's any
+     (let ((buffer-process (get-buffer-process buffer)))
+       (when buffer-process
+         (let ((mark-pos (marker-position (process-mark buffer-process))))
+           (process-send-string process
+                                (crdt--format-message
+                                 `(process-mark ,crdt--buffer-network-name
+                                                ,(crdt--get-id mark-pos) ,mark-pos)))))))))
 
 (defun crdt--greet-client (process)
   "Send initial information when a client connects.
@@ -1277,7 +1314,8 @@ The network process for the client connection is PROCESS."
 
 (cl-defmethod crdt-process-message (message process)
   (message "Unrecognized message %S from %s:%s."
-           message (process-contact process :host) (process-contact process :service)))
+           message (process-contact process :host) (process-contact process :service))
+  (signal 'crdt-unrecognized-message nil))
 
 (cl-defmethod crdt-process-message ((message (head insert)) process)
   (cl-destructuring-bind (buffer-name crdt-id position-hint content) (cdr message)
@@ -1324,7 +1362,7 @@ The network process for the client connection is PROCESS."
                     (lambda ()
                       (goto-char
                        (max (min pos (point-max))
-                            (point-max)))))))
+                            (point-min)))))))
           (erase-buffer)
           (crdt--load-ids ids))))
     (crdt--refresh-buffers-maybe)))
@@ -1341,6 +1379,13 @@ The network process for the client connection is PROCESS."
 	(when crdt--buffer-sync-callback
           (funcall crdt--buffer-sync-callback)
           (setq crdt--buffer-sync-callback nil))))))
+
+(cl-defmethod crdt-process-message ((message (head error)) _process)
+  (unless (crdt--server-p)
+    (cl-destructuring-bind (buffer-name &rest err) (cdr message)
+      (crdt--with-buffer-name buffer-name
+        (message "Server side error %s." err)
+        (crdt--recover)))))
 
 (cl-defmethod crdt-process-message ((message (head add)) _process)
   (dolist (buffer-name (cdr message))
@@ -1414,6 +1459,8 @@ The network process for the client connection is PROCESS."
     (crdt--refresh-users-maybe))
   (crdt--broadcast-maybe (crdt--format-message message) (process-get process 'client-id)))
 
+(define-error 'crdt-unrecognized-message "Unhandled crdt-unrecognized-message.")
+
 (defun crdt--network-filter (process string)
   "Network filter function for CRDT network processes.
 Handle received STRING from PROCESS."
@@ -1434,31 +1481,30 @@ Handle received STRING from PROCESS."
         (while (setq message (ignore-errors (read (current-buffer))))
           (when crdt--log-network-traffic
             (print message))
-          (cl-macrolet ((body ()
-                          '(if (or (not (crdt--server-p)) (process-get process 'authenticated))
-                            (let ((crdt--inhibit-update t))
-                              (crdt-process-message message process))
-                            (cl-block nil
-                              (when (eq (car message) 'hello)
-                                (cl-destructuring-bind (name &optional response) (cdr message)
-                                  (when (or (not (process-get process 'password)) ; server password is empty
-                                            (and response (string-equal response (process-get process 'challenge))))
-                                    (process-put process 'authenticated t)
-                                    (process-put process 'client-name name)
-                                    (crdt--greet-client process)
-                                    (cl-return))))
-                              (let ((challenge (crdt--generate-challenge)))
-                                (process-put process 'challenge
-                                             (gnutls-hash-mac 'SHA1 (substring (process-get process 'password)) challenge))
-                                (process-send-string process (crdt--format-message `(challenge ,challenge))))))))
-            (if debug-on-error (body)
-              (condition-case err (body)
-                (error (message "%s error when processing message from %s:%s, disconnecting." err
-                                (process-contact process :host) (process-contact process :service))
-                       (if (crdt--server-p)
-                           (progn
-                             (delete-process process))
-                         (crdt--stop-session crdt--session))))))
+          (condition-case err
+              (if (or (not (crdt--server-p)) (process-get process 'authenticated))
+                  (let ((crdt--inhibit-update t)
+                        (crdt--process process))
+                    (crdt-process-message message process))
+                (cl-block nil
+                  (when (eq (car message) 'hello)
+                    (cl-destructuring-bind (name &optional response) (cdr message)
+                      (when (or (not (process-get process 'password)) ; server password is empty
+                                (and response (string-equal response (process-get process 'challenge))))
+                        (process-put process 'authenticated t)
+                        (process-put process 'client-name name)
+                        (crdt--greet-client process)
+                        (cl-return))))
+                  (let ((challenge (crdt--generate-challenge)))
+                    (process-put process 'challenge
+                                 (gnutls-hash-mac 'SHA1 (substring (process-get process 'password)) challenge))
+                    (process-send-string process (crdt--format-message `(challenge ,challenge))))))
+            (error
+             (message "%s error when processing message from %s:%s, disconnecting." err
+                      (process-contact process :host) (process-contact process :service))
+             (if (crdt--server-p)
+                 (delete-process process)
+               (crdt--stop-session crdt--session))))
           (delete-region (point-min) (point))
           (goto-char (point-min)))))))
 
@@ -1469,7 +1515,6 @@ Handle received STRING from PROCESS."
       ;; client disconnected
       (setf (crdt--session-network-clients crdt--session)
             (delq client (crdt--session-network-clients crdt--session)))
-      (when (process-buffer client) (kill-buffer (process-buffer client)))
       ;; generate a clear cursor message and a clear contact message
       (let* ((client-id (process-get client 'client-id))
              (clear-contact-message `(contact ,client-id nil)))
@@ -1480,7 +1525,8 @@ Handle received STRING from PROCESS."
             `(cursor ,k ,client-id 1 nil 1 nil)
             client))
          (crdt--session-buffer-table crdt--session))
-        (crdt--refresh-users-maybe)))))
+        (crdt--refresh-users-maybe))
+      (when (process-buffer client) (kill-buffer (process-buffer client))))))
 
 (defun crdt--client-process-sentinel (process _message)
   (unless (eq (process-status process) 'open)
@@ -1512,13 +1558,14 @@ SESSION-NAME if provided is used in the prompt."
         (setq crdt--buffer-network-name (buffer-name buffer))
         (crdt-mode)
         (save-excursion
-          (widen)
-          (let ((crdt--inhibit-update t))
-            (with-silent-modifications
-              (crdt--local-insert (point-min) (point-max))))
-          (crdt--broadcast-maybe
-           (crdt--format-message `(add
-                                   ,crdt--buffer-network-name))))
+          (save-restriction
+            (widen)
+            (let ((crdt--inhibit-update t))
+              (with-silent-modifications
+                (crdt--local-insert (point-min) (point-max))))
+            (crdt--broadcast-maybe
+             (crdt--format-message `(add
+                                     ,crdt--buffer-network-name)))))
         (add-hook 'kill-buffer-hook #'crdt-stop-share-buffer nil t)
         (crdt--refresh-buffers-maybe)
         (crdt--refresh-sessions-maybe))
@@ -1613,7 +1660,7 @@ Setup up the server with PASSWORD and assign this Emacs DISPLAY-NAME."
                              :buffer (generate-new-buffer "*Tuntox Proxy*")
                              :command
                              `(,crdt-tuntox-executable
-                               "-C" ,crdt-tuntox-key-path
+                               "-C" ,(expand-file-name crdt-tuntox-key-path)
                                "-f" "/dev/stdin" ; do the filtering for safety sake
                                ,@ (when (and password (> (length password) 0))
                                     `("-s" ,password))))))
@@ -1974,12 +2021,13 @@ Join with DISPLAY-NAME."
   (if crdt-org-sync-overlay-mode
       (progn
         (save-excursion
-          (widen)
-          ;; heuristic to remove existing org overlays
-          (cl-loop for ov in (overlays-in (point-min) (point-max))
-                do (when (memq (overlay-get ov 'invisible)
-                               '(outline org-hide-block))
-                     (delete-overlay ov))))
+          (save-restriction
+            (widen)
+            ;; heuristic to remove existing org overlays
+            (cl-loop for ov in (overlays-in (point-min) (point-max))
+                  do (when (memq (overlay-get ov 'invisible)
+                                 '(outline org-hide-block))
+                       (delete-overlay ov)))))
         (crdt--enable-overlay-species 'org))
     (crdt--disable-overlay-species 'org)))
 
@@ -2110,14 +2158,12 @@ Join with DISPLAY-NAME."
 (defun crdt--install-process-advices ()
   "Globally enable advices for simulating remote buffer process.
 We don't install them by default because those advices sometimes seem to interfere with other packages."
-  (mapcar (lambda (pair)
-            (advice-add (car pair) :around (cdr pair)))
-          crdt--process-advice-alist))
+  (dolist (pair crdt--process-advice-alist)
+    (advice-add (car pair) :around (cdr pair))))
 
 (defun crdt--uninstall-process-advices ()
-  (mapcar (lambda (pair)
-            (advice-remove (car pair) (cdr pair)))
-          crdt--process-advice-alist))
+  (dolist (pair crdt--process-advice-alist)
+    (advice-remove (car pair) (cdr pair))))
 
 (cl-defmethod crdt-process-message ((message (head process)) _process)
   (cl-destructuring-bind (buffer-name string) (cdr message)
