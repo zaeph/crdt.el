@@ -344,6 +344,9 @@ Each element is of the form (CURSOR-OVERLAY . REGION-OVERLAY).")
 
 (defvar crdt--session-menu-buffer nil)
 
+(defvar crdt--process nil
+  "Temporarily bound to the current network process when processing messages inside CRDT--NETWORK-FILTER.")
+
 ;;; crdt-mode
 
 (defvar crdt--hooks-alist
@@ -465,9 +468,7 @@ If such buffer doesn't exist yet, do nothing."
            (widen)
            (condition-case err
                ,(cons 'progn body)
-             (error (if (crdt--server-p)
-                        (signal (car err) (cdr err)) ; didn't implement server side recovery yet
-                      (crdt--client-recover)))))))))
+             (error (crdt--recover err))))))))
 
 (defmacro crdt--with-buffer-name-pull (name &rest body)
   "Find CRDT shared buffer associated with NAME and evaluate BODY in it.
@@ -1138,14 +1139,25 @@ Verify that CRDT IDs in a document follows ascending order."
 
 ;;; Recovery
 
-(defun crdt--client-recover ()
-  "Try to recover from a synchronization failure from a client.
+(defun crdt--recover (&optional err)
+  "Try to recover from a synchronization failure.
 Current buffer is assmuned to be the one with synchronization error."
-  (ding)
-  (read-only-mode)
-  (message "Synchronization error detected, try recovering...")
-  (crdt--broadcast-maybe
-   (crdt--format-message `(get ,crdt--buffer-network-name))))
+  (if (crdt--server-p)
+      (progn
+        (let ((message (crdt--format-message `(error ,crdt--buffer-network-name ,@err))))
+          (condition-case nil
+              (read-from-string message)
+            (invalid-read-syntax
+             ;; (cdr err) must be unprintable, omit it for now
+             ;; maybe handle some objects in the future
+             ;; (e.g. represent buffer object with its name)
+             (setq message (crdt--format-message `(error ,crdt--buffer-network-name ,(car err))))))
+          (process-send-string crdt--process message)))
+    (ding)
+    (read-only-mode)
+    (message "Synchronization error detected, try recovering...")
+    (crdt--broadcast-maybe
+     (crdt--format-message `(get ,crdt--buffer-network-name)))))
 
 ;;; Network protocol
 
@@ -1302,7 +1314,8 @@ The network process for the client connection is PROCESS."
 
 (cl-defmethod crdt-process-message (message process)
   (message "Unrecognized message %S from %s:%s."
-           message (process-contact process :host) (process-contact process :service)))
+           message (process-contact process :host) (process-contact process :service))
+  (signal 'crdt-unrecognized-message nil))
 
 (cl-defmethod crdt-process-message ((message (head insert)) process)
   (cl-destructuring-bind (buffer-name crdt-id position-hint content) (cdr message)
@@ -1349,7 +1362,7 @@ The network process for the client connection is PROCESS."
                     (lambda ()
                       (goto-char
                        (max (min pos (point-max))
-                            (point-max)))))))
+                            (point-min)))))))
           (erase-buffer)
           (crdt--load-ids ids))))
     (crdt--refresh-buffers-maybe)))
@@ -1366,6 +1379,13 @@ The network process for the client connection is PROCESS."
 	(when crdt--buffer-sync-callback
           (funcall crdt--buffer-sync-callback)
           (setq crdt--buffer-sync-callback nil))))))
+
+(cl-defmethod crdt-process-message ((message (head error)) _process)
+  (unless (crdt--server-p)
+    (cl-destructuring-bind (buffer-name &rest err) (cdr message)
+      (crdt--with-buffer-name buffer-name
+        (message "Server side error %s." err)
+        (crdt--recover)))))
 
 (cl-defmethod crdt-process-message ((message (head add)) _process)
   (dolist (buffer-name (cdr message))
@@ -1439,6 +1459,8 @@ The network process for the client connection is PROCESS."
     (crdt--refresh-users-maybe))
   (crdt--broadcast-maybe (crdt--format-message message) (process-get process 'client-id)))
 
+(define-error 'crdt-unrecognized-message "Unhandled crdt-unrecognized-message.")
+
 (defun crdt--network-filter (process string)
   "Network filter function for CRDT network processes.
 Handle received STRING from PROCESS."
@@ -1459,31 +1481,30 @@ Handle received STRING from PROCESS."
         (while (setq message (ignore-errors (read (current-buffer))))
           (when crdt--log-network-traffic
             (print message))
-          (cl-macrolet ((body ()
-                          '(if (or (not (crdt--server-p)) (process-get process 'authenticated))
-                            (let ((crdt--inhibit-update t))
-                              (crdt-process-message message process))
-                            (cl-block nil
-                              (when (eq (car message) 'hello)
-                                (cl-destructuring-bind (name &optional response) (cdr message)
-                                  (when (or (not (process-get process 'password)) ; server password is empty
-                                            (and response (string-equal response (process-get process 'challenge))))
-                                    (process-put process 'authenticated t)
-                                    (process-put process 'client-name name)
-                                    (crdt--greet-client process)
-                                    (cl-return))))
-                              (let ((challenge (crdt--generate-challenge)))
-                                (process-put process 'challenge
-                                             (gnutls-hash-mac 'SHA1 (substring (process-get process 'password)) challenge))
-                                (process-send-string process (crdt--format-message `(challenge ,challenge))))))))
-            (if debug-on-error (body)
-              (condition-case err (body)
-                (error (message "%s error when processing message from %s:%s, disconnecting." err
-                                (process-contact process :host) (process-contact process :service))
-                       (if (crdt--server-p)
-                           (progn
-                             (delete-process process))
-                         (crdt--stop-session crdt--session))))))
+          (condition-case err
+              (if (or (not (crdt--server-p)) (process-get process 'authenticated))
+                  (let ((crdt--inhibit-update t)
+                        (crdt--process process))
+                    (crdt-process-message message process))
+                (cl-block nil
+                  (when (eq (car message) 'hello)
+                    (cl-destructuring-bind (name &optional response) (cdr message)
+                      (when (or (not (process-get process 'password)) ; server password is empty
+                                (and response (string-equal response (process-get process 'challenge))))
+                        (process-put process 'authenticated t)
+                        (process-put process 'client-name name)
+                        (crdt--greet-client process)
+                        (cl-return))))
+                  (let ((challenge (crdt--generate-challenge)))
+                    (process-put process 'challenge
+                                 (gnutls-hash-mac 'SHA1 (substring (process-get process 'password)) challenge))
+                    (process-send-string process (crdt--format-message `(challenge ,challenge))))))
+            (error
+             (message "%s error when processing message from %s:%s, disconnecting." err
+                      (process-contact process :host) (process-contact process :service))
+             (if (crdt--server-p)
+                 (delete-process process)
+               (crdt--stop-session crdt--session))))
           (delete-region (point-min) (point))
           (goto-char (point-min)))))))
 
@@ -1494,7 +1515,6 @@ Handle received STRING from PROCESS."
       ;; client disconnected
       (setf (crdt--session-network-clients crdt--session)
             (delq client (crdt--session-network-clients crdt--session)))
-      (when (process-buffer client) (kill-buffer (process-buffer client)))
       ;; generate a clear cursor message and a clear contact message
       (let* ((client-id (process-get client 'client-id))
              (clear-contact-message `(contact ,client-id nil)))
@@ -1505,7 +1525,8 @@ Handle received STRING from PROCESS."
             `(cursor ,k ,client-id 1 nil 1 nil)
             client))
          (crdt--session-buffer-table crdt--session))
-        (crdt--refresh-users-maybe)))))
+        (crdt--refresh-users-maybe))
+      (when (process-buffer client) (kill-buffer (process-buffer client))))))
 
 (defun crdt--client-process-sentinel (process _message)
   (unless (eq (process-status process) 'open)
