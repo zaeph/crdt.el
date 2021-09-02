@@ -30,7 +30,8 @@ and second last two bytes represent site ID.
       - =content= is the string to be inserted
 
     + delete ::
-      body takes the form =(buffer-name position-hint (crdt-id . length)*)=
+      body takes the form =(buffer-name position-hint . crdt-id-list)=
+      - =crdt-id-list= is generated from =CRDT--DUMP-IDS= from the deleted text
 
   - Peer State
     + cursor ::
@@ -129,6 +130,13 @@ and second last two bytes represent site ID.
 
     + overlay-remove ::
       body takes the form =(buffer-name site-id logical-clock)=
+
+  - Remote Command
+    + command ::
+      body takes the form =(buffer-name site-id logical-clock command-symbol . args)=
+
+    + return ::
+      body takes the form =(site-id logical-clock success-p . return-values)=
 
   - Remote Buffer Process
     + process ::
