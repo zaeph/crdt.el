@@ -160,7 +160,58 @@ By implementing synchronization primitives for all components in a buffer,
 pretty much everything can be made collaborative.
 Synchronize arbitrary buffer-local-variable reasonably is hard, but user annotations can help.
 
-** TODO task list
+** How to implement collaboration support to an package
+
+~crdt.el~ provides two sets of facilities for adding collaboration support, a command-based one and a state-based one. 
+Package hackers are free to combine them to provide desired behavior.
+
+*** Command-based collaboration
+
+This is a simple method to add collaboration support. 
+After registering a command with =crdt-register-remote-command=, 
+an =:around= advice is added such that when a client invoke this command,
+an request is sent to the server instead of running the command locally.
+
+Hackers must make sure that they declare what sets of buffer state the command uses 
+to fully preserve user intent.
+
+Although relatively simple, collaboration command implemented using this method
+must go through a round trip to the server and will incur latency.
+
+**** Why we need used-state-set annotations
+
+Suppose Alyssa P. Hacker does =(crdt-register-remote-command 'eval-last-sexp)=,
+but didn't declare that =eval-last-sexp= uses content of the buffer.
+Now the hackers are conspiring in an ~crdt.el~ session. 
+Ben Bitdiddle places cursor after =(+ 1 1)= and run =eval-last-sexp=.
+However, the moment Ben Bitdiddle's request arrives at the server, 
+Cy D. Fect has changed =(+ 1 1)= to =(+ 1 2)= (their message arrives first!).
+Now the server does what it sees and return =3=, instead of =2=.
+
+The correct solution is to let the server roll-back to the state when Ben Bitdiddle invoked the command.
+It is relatively expensive thus we don't want to do this for every command,
+thus we require package hackers to annotate explicitly.
+
+/The above mechanism haven't been implemented yet!/ 
+But adding annotations now will help adding it in the future.
+To implement this mechanism we need to add lamport timestamp to every messages 
+(which may corresponds to mutation of interesting states),
+and send a vector clock in =command= messages which depend on buffer content.
+
+*** State-based collaboration
+
+We can also synchronize the underlying state of the packages 
+rather than proxying user-level commands.
+If there're good CRDT candidates to be used for the state 
+(hackers need to understand what concurrency semantics their state need to have!),
+then the commands can have real-time effect without needing to be acknowledged from the server.
+
+=crdt-org-sync-overlay-mode= is an example of this approach.
+
+Overall, this method is much more complicated than command-base method. 
+Development of the facility is still on-going.
+
+** TODO Task list for ~crdt.el~ facility
    - [X] synchronize buffer text (insert/delete)
    - [X] synchronize overlays
    - [-] synchronize major/minor modes
@@ -172,6 +223,12 @@ Synchronize arbitrary buffer-local-variable reasonably is hard, but user annotat
      + [ ] a library of CRDTs
    - [ ] synchronize text properties (any use case for this?)
    - [ ] synchronize markers (any use case for this?)
+   - [-] remote command
+     + [X] basic remote command (only possibly use =(point)=)
+     + [ ] command that uses region
+     + [ ] correctly handle command that uses buffer content
+     + [ ] handle arbitrary =interactive= form (firstly, what's the right thing to do?)
+   - [-] remote buffer process
 
 * TODO Cross-editor support
 
