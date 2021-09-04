@@ -5,8 +5,12 @@ Background reading: [[https://en.wikipedia.org/wiki/Conflict-free_replicated_dat
 This packages implements the Logoot split algorithm
 ~André, Luc, et al. "Supporting adaptable granularity of changes for massive-scale collaborative editing." 9th IEEE International Conference on Collaborative Computing: Networking, Applications and Worksharing. IEEE, 2013.~
     
-The CRDT-ID blocks are implemented by text property ='crdt-id=. A continous range of text with the same ='crdt-id'= property represent a CRDT-ID block. The ='crdt-id= is a a cons of =(ID-STRING . END-OF-BLOCK-P)=, where
-=ID-STRING= represent the CRDT-ID of the leftmost character in the block. If =END-OF-BLOCK-P= is =NIL=, the block is a non-rightmost segment splitted from a larger block, so insertion at the right of this block shouldn't be merged into the block by sharing the base CRDT-ID and increasing offset.
+The CRDT-ID blocks are implemented by text property ='crdt-id=. 
+A continous range of text with the same ='crdt-id'= property represent a CRDT-ID block. 
+The ='crdt-id= is a a cons of =(ID-STRING . END-OF-BLOCK-P)=, 
+where =ID-STRING= represent the CRDT-ID of the leftmost character in the block.
+If =END-OF-BLOCK-P= is =NIL=, the block is a non-rightmost segment splitted from a larger block,
+so insertion at the right of this block shouldn't be merged into the block by sharing the base CRDT-ID and increasing offset.
 
 =ID-STRING= is a unibyte string representing a CRDT-ID (for efficient comparison).
 Every two bytes represent a big endian encoded integer.
@@ -133,7 +137,24 @@ and second last two bytes represent site ID.
 
   - Remote Command
     + command ::
-      body takes the form =(buffer-name site-id logical-clock command-symbol . args)=
+      body takes the form
+      #+BEGIN_SRC
+      (buffer-name spawn-site-id
+       site-id logical-clock state-list
+       command-symbol . args)
+      #+END_SRC
+       - =spawn-site-id= represents the site where the interactive command is originally invoked
+         + It can be different from =site-id= because a remote command can call a remote command!
+           This is especially useful when client makes a remote call, 
+           but the call on the server request some interactive input,
+           and such interactive call are remote-called back into the client.
+       - =state-list= is an alist of bindings.
+        (except that we use 1 element list for the CDRs, to save a dot in the serialized string)
+        (CDRs can also be 2 element list of the form =(crdt-id pos-hint)=)
+        Allowed symbols are 
+        #+BEGIN_SRC
+        point mark mark-active transient-mark-mode last-command-event
+        #+END_SRC
 
     + return ::
       body takes the form =(site-id logical-clock success-p . return-values)=
@@ -160,7 +181,7 @@ By implementing synchronization primitives for all components in a buffer,
 pretty much everything can be made collaborative.
 Synchronize arbitrary buffer-local-variable reasonably is hard, but user annotations can help.
 
-** How to implement collaboration support to an package
+** How to implement collaboration support for a package
 
 ~crdt.el~ provides two sets of facilities for adding collaboration support, a command-based one and a state-based one. 
 Package hackers are free to combine them to provide desired behavior.
@@ -225,7 +246,7 @@ Development of the facility is still on-going.
    - [ ] synchronize markers (any use case for this?)
    - [-] remote command
      + [X] basic remote command (only possibly use =(point)=)
-     + [ ] command that uses region
+     + [X] command that uses region
      + [ ] correctly handle command that uses buffer content
      + [ ] handle arbitrary =interactive= form (firstly, what's the right thing to do?)
    - [-] remote buffer process
