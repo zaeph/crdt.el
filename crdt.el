@@ -2256,7 +2256,7 @@ Stop allowing remote calls to FUNCTION-SYMBOL."
               (let ((major-mode 'scheme-debugger-mode-initialize))
                 (crdt--after-change-major-mode))))
 ;; I can't get input prompt from debugger to pop up at the right place.
-;; Because it's doen asynchronously in process filter,
+;; Because it's done asynchronously in process filter,
 ;; and there seems to be no way to know the correct SPAWN-SITE-ID.
 
 ;;; pseudo process
