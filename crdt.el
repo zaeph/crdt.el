@@ -2536,6 +2536,9 @@ The result DIFF can be used in (CRDT--NAPPLY-DIFF OLD DIFF) to reproduce NEW."
 
 (crdt-register-autoload 'shell-mode 'shell)
 (crdt-register-autoload 'inferior-scheme-mode 'cmuscheme)
+(crdt-register-autoload 'inferior-python-mode 'python)
+(crdt-register-autoload 'prolog-inferior-mode 'prolog)
+(crdt-register-autoload 'inferior-lisp-mode 'inf-lisp)
 
 (put 'comint-input-ring 'crdt-variable-scheme crdt-variable-scheme-diff-server)
 
