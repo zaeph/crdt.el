@@ -255,9 +255,9 @@ Development of the facility is still on-going.
        + [X] naive incremental
        + [ ] state-of-the-art level tree diff
      + [ ] a library of CRDTs
-   - [-] synchronize text properties (any use case for this?)
+   - [X] synchronize text properties (any use case for this?)
      + [X] synchronize when new text is inserted
-     + [ ] synchronize when changed
+     + [X] synchronize when changed
    - [ ] synchronize markers (any use case for this?)
    - [-] remote command
      + [X] basic remote command (only possibly use =(point)=)

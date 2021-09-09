@@ -487,10 +487,8 @@ NAME is included in the report."
        (progn ,@ body)
      (error
       (ding)
-      (message "Error happens inside %s. This should never happen, please submit an issue to crdt.el maintainers." ',name)
+      (message "Error happens inside %s. This should never happen, please file a report to crdt.el maintainers." ',name)
       (message " Error: %s" err)
-      (message " Backtrace: ")
-      (backtrace)
       (if (crdt--server-p)
           (progn
             (message "Stop sharing the buffer because of error.")
@@ -1043,7 +1041,9 @@ Start the search for those ID-ITEMs around POSITION-HINT."
   "Before change hook used by CRDT-MODE.
 It saves the content to be changed (between BEG and END) into CRDT--CHANGED-STRING."
   (unless crdt--inhibit-update
-    (setq crdt--changed-string (buffer-substring beg end))
+    (setq crdt--changed-string (crdt--buffer-substring beg end))
+    (crdt--text-property-assimilate nil beg end 0
+                                    'crdt-id crdt--changed-string)
     (setq crdt--changed-start beg)))
 
 (defsubst crdt--crdt-id-assimilate (template beg &optional object)
@@ -1075,8 +1075,8 @@ update the CRDT-ID for any newly inserted text, and send message to other peers 
             (save-restriction
               (goto-char beg)
               (if (and (= length (- end beg))
-                       (string-equal (crdt--changed-string beg length)
-                                     (buffer-substring-no-properties beg end)))
+                       (equal-including-properties (crdt--changed-string beg length)
+                                                   (crdt--buffer-substring beg end)))
                   (crdt--crdt-id-assimilate (crdt--changed-string beg length) beg)
                 (widen)
                 (with-silent-modifications
@@ -2518,6 +2518,7 @@ The result DIFF can be used in (CRDT--NAPPLY-DIFF OLD DIFF) to reproduce NEW."
 (defvar comint-input-ring)
 (defvar comint-input-ignoredups)
 (defvar comint-input-ring-size)
+(defvar comint-input-ring-file-name)
 
 (defvar crdt-comint-command-entries
   '((comint-send-input (point) (point))
