@@ -2541,7 +2541,7 @@ The result DIFF can be used in (CRDT--NAPPLY-DIFF OLD DIFF) to reproduce NEW."
 
 (defcustom crdt-comint-share-input-history 'censor
   "Share comint input history.
-If the value is censor,
+If the value is 'censor,
 show only input history generated during a CRDT session to its peers,
 Merge with history generated before the session after the buffer is no longer shared."
   :type '(choice boolean (const censor)))

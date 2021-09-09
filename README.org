@@ -118,3 +118,10 @@ based on which user authored it.
 
 Turn on =crdt-org-sync-overlay-mode=. All peers that have this enabled have their
 folding status synchronized. Peers without enabling this minor mode are unaffected.
+
+** Comint integration
+
+Just go ahead and share you comint REPL buffer! Tested: ~shell~ and ~cmuscheme~.
+By default, when sharing a comint buffer, ~crdt.el~ temporarily reset input history (as in =M-n= =M-p=)
+so others don't spy into your =.bash_history= and alike.
+You can customize this behavior using variable =crdt-comint-share-input-history=.
