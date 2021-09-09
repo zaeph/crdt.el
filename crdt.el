@@ -459,15 +459,7 @@ Also set CRDT--PSEUDO-CURSOR-TABLE to NIL."
       (widen)
       (remove-overlays (point-min) (point-max) 'category 'crdt-visualize-author))))
 
-;;; Shared buffer utils
-
-(defsubst crdt--server-p (&optional session)
-  "Tell if SESSION is running as a server.
-If SESSION is nil, use current CRDT--SESSION."
-  (process-contact
-   (crdt--session-network-process
-    (or session crdt--session))
-   :server))
+;;; Error recovery
 
 (define-error 'crdt-sync-error "CRDT synchronization error")
 
@@ -496,6 +488,30 @@ NAME is included in the report."
         (progn
           (message "Killing the buffer because of error.")
           (kill-buffer))))))
+
+(defun crdt--recover (&optional err)
+  "Try to recover from a synchronization failure.
+Current buffer is assmuned to be the one with synchronization error.
+If we are the server, ERR is the error we shall report to client."
+  (if (crdt--server-p)
+      (progn
+        (let ((message (crdt--format-message `(error ,crdt--buffer-network-name ,(car err) ,(crdt--readable-encode (cdr err))))))
+          (process-send-string crdt--process message)))
+    (ding)
+    (read-only-mode)
+    (message "Synchronization error detected, try recovering...")
+    (crdt--broadcast-maybe
+     (crdt--format-message `(get ,crdt--buffer-network-name)))))
+
+;;; Shared buffer utils
+
+(defsubst crdt--server-p (&optional session)
+  "Tell if SESSION is running as a server.
+If SESSION is nil, use current CRDT--SESSION."
+  (process-contact
+   (crdt--session-network-process
+    (or session crdt--session))
+   :server))
 
 (defmacro crdt--with-buffer-name (name &rest body)
   "Find CRDT shared buffer associated with NAME and evaluate BODY in it.
@@ -1236,22 +1252,6 @@ Verify that CRDT IDs in a document follows ascending order."
           (setq pos next-pos)
           (setq id next-id))))))
 
-;;; Recovery
-
-(defun crdt--recover (&optional err)
-  "Try to recover from a synchronization failure.
-Current buffer is assmuned to be the one with synchronization error.
-If we are the server, ERR is the error we shall report to client."
-  (if (crdt--server-p)
-      (progn
-        (let ((message (crdt--format-message `(error ,crdt--buffer-network-name ,(car err) ,(crdt--readable-encode (cdr err))))))
-          (process-send-string crdt--process message)))
-    (ding)
-    (read-only-mode)
-    (message "Synchronization error detected, try recovering...")
-    (crdt--broadcast-maybe
-     (crdt--format-message `(get ,crdt--buffer-network-name)))))
-
 ;;; Network protocol
 
 (defun crdt--format-message (args)
@@ -1514,9 +1514,12 @@ CRDT--PROCESS should be bound to The network process for the client connection."
 (define-crdt-message-handler ready (buffer-name mode)
   (unless (crdt--server-p)           ; server shouldn't receive this
     (crdt--with-buffer-name buffer-name
+      (unless (fboundp mode)
+        (when (get mode 'crdt-autoload)
+          (require (get mode 'crdt-autoload) nil t)))
       (if (fboundp mode)
           (unless (eq major-mode mode)
-            (funcall mode)            ; trust your server...
+            (funcall mode)              ; trust your server...
             (crdt-mode))
         (message "Server uses %s, but not available locally." mode))
       (when crdt--buffer-sync-callback
@@ -2181,6 +2184,12 @@ Join with DISPLAY-NAME."
 (cl-loop for command in '(org-cycle org-shifttab)
       do (advice-add command :around #'crdt--org-overlay-advice))
 
+;;; Auxillary autoload
+
+(defun crdt-register-autoload (mode feature)
+  "Register for autoloading FEATURE before CRDT enforce major MODE."
+  (put mode 'crdt-autoload feature))
+
 ;;; Remote Command
 
 (defun crdt--assemble-state-list (states)
@@ -2470,8 +2479,7 @@ The result DIFF can be used in (CRDT--NAPPLY-DIFF OLD DIFF) to reproduce NEW."
        (if (symbolp scheme) (symbol-value scheme) scheme)))
 
 (defun crdt-unregister-variable (variable)
-  (delq variable crdt-variables)
-  (cl-remprop variable 'crdt-variable-scheme))
+  (delq variable crdt-variables))
 
 (defun crdt-register-variables (variable-entries)
   (dolist (entry variable-entries)
@@ -2525,6 +2533,11 @@ The result DIFF can be used in (CRDT--NAPPLY-DIFF OLD DIFF) to reproduce NEW."
     (comint-send-region (region) (region))))
 
 (crdt-register-remote-commands crdt-comint-command-entries)
+
+(crdt-register-autoload 'shell-mode 'shell)
+(crdt-register-autoload 'inferior-scheme-mode 'cmuscheme)
+
+(put 'comint-input-ring 'crdt-variable-scheme crdt-variable-scheme-diff-server)
 
 (defcustom crdt-comint-share-input-history 'censor
   "Share comint input history.
