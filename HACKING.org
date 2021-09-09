@@ -157,7 +157,17 @@ and second last two bytes represent site ID.
         #+END_SRC
 
     + return ::
-      body takes the form =(site-id logical-clock success-p . return-values)=
+      body takes the form =(site-id logical-clock state-list success-p . return-values)=
+
+  - Buffer local variables
+    + var :: body takes the form =(buffer-name variable-symbol . args)=
+      =args= is passed to the variable receiver =(get variable-symbol 'crdt-variable-receiver)=
+      to calculate an updated value.
+      The actual format of =args= depends on the variable sender and receiver 
+      (which supposed implement some CRDT).
+
+      All peer must make sure they install the same kind of variable sender and receiver
+      for =variable-symbol=.
 
   - Remote Buffer Process
     + process ::
@@ -239,10 +249,15 @@ Development of the facility is still on-going.
      + [X] initial synchronization of major modes
      + [ ] toggle minor modes on the fly
      + [X] change major modes on the fly
-   - [ ] set of synchronization primitives for buffer local variables
-     + [ ] server dictated
+   - [-] set of synchronization primitives for buffer local variables
+     + [-] server dictated
+       + [ ] non incremental
+       + [X] naive incremental
+       + [ ] state-of-the-art level tree diff
      + [ ] a library of CRDTs
-   - [ ] synchronize text properties (any use case for this?)
+   - [-] synchronize text properties (any use case for this?)
+     + [X] synchronize when new text is inserted
+     + [ ] synchronize when changed
    - [ ] synchronize markers (any use case for this?)
    - [-] remote command
      + [X] basic remote command (only possibly use =(point)=)
@@ -250,6 +265,14 @@ Development of the facility is still on-going.
      + [ ] correctly handle command that uses buffer content
      + [ ] handle arbitrary =interactive= form (firstly, what's the right thing to do?)
    - [-] remote buffer process
+     + [X] process mark
+     + [X] send to process
+     + [ ] make sure "pseudo process" really looks like process 
+           (define complete set of advices)
+
+** Notes and examples of CRDTize built-in packages
+
+Search for =;;; Built-in package integrations= in ~crdt.el~
 
 * TODO Cross-editor support
 
