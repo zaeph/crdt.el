@@ -2335,7 +2335,7 @@ Stop allowing remote calls to FUNCTION-SYMBOL."
 
 ;;; Buffer local variables
 
-(defvar crdt-variables nil)
+(defvar-local crdt-variables nil)
 
 (cl-defun crdt--send-variables-maybe (&optional (incremental t))
   (dolist (var crdt-variables)
@@ -2464,17 +2464,22 @@ The result DIFF can be used in (CRDT--NAPPLY-DIFF OLD DIFF) to reproduce NEW."
 
 (defvar crdt-variable-scheme-diff-server (cons #'crdt--diff-server-variable-sender #'crdt--diff-server-variable-receiver))
 
+(defun crdt-register-variable (variable scheme)
+  (add-to-list 'crdt-variables variable)
+  (put variable 'crdt-variable-scheme
+       (if (symbolp scheme) (symbol-value scheme) scheme)))
+
+(defun crdt-unregister-variable (variable)
+  (delq variable crdt-variables)
+  (cl-remprop variable 'crdt-variable-scheme))
+
 (defun crdt-register-variables (variable-entries)
   (dolist (entry variable-entries)
-    (cl-destructuring-bind (var scheme) entry
-      (cl-pushnew var crdt-variables)
-      (put var 'crdt-variable-scheme (symbol-value scheme)))))
+    (apply #'crdt-register-variable entry)))
 
 (defun crdt-unregister-variables (variable-entries)
   (dolist (entry variable-entries)
-    (cl-destructuring-bind (var _scheme) entry
-      (delq var crdt-variables)
-      (cl-remprop var 'crdt-variable-scheme))))
+    (crdt-unregister-variable (car entry))))
 
 ;;; Built-in package integrations
 
@@ -2518,12 +2523,7 @@ The result DIFF can be used in (CRDT--NAPPLY-DIFF OLD DIFF) to reproduce NEW."
   '((comint-send-input (point) (point))
     (comint-send-region (region) (region))))
 
-;; We also synchronize some buffer local variables to improve client side completion.
-(defvar crdt-comint-variable-entries
-  '((comint-input-ring crdt-variable-scheme-diff-server)))
-
 (crdt-register-remote-commands crdt-comint-command-entries)
-(crdt-register-variables crdt-comint-variable-entries)
 
 (defcustom crdt-comint-share-input-history 'censor
   "Share comint input history.
@@ -2535,6 +2535,9 @@ Merge with history generated before the session after the buffer is no longer sh
 (defvar-local crdt--comint-saved-input-ring nil)
 
 (defun crdt--merge-ring (old-ring delta-ring nodups)
+  "Construct a new ring by merging OLD-RING and DELTA-RING.
+If NODUPS is non-nil, don't duplicate existing items in OLD-RING.
+This procedure is non-destructive."
   (if delta-ring
       (let ((old-ring (copy-tree old-ring t)))
         (cl-loop for i from (1- (ring-length delta-ring)) downto 0
@@ -2544,7 +2547,8 @@ Merge with history generated before the session after the buffer is no longer sh
                        (when index
                          (ring-remove old-ring index))
                        (ring-insert old-ring item))
-                   (ring-insert old-ring item))))
+                   (ring-insert old-ring item)))
+        old-ring)
     old-ring))
 
 (defsubst crdt--comint-effective-ring ()
@@ -2559,7 +2563,14 @@ Merge with history generated before the session after the buffer is no longer sh
           (add-to-list 'crdt--enabled-text-properties 'field)
           (add-to-list 'crdt--enabled-text-properties 'front-sticky)
           (add-to-list 'crdt--enabled-text-properties 'rear-nonsticky)
-          (cl-shiftf crdt--comint-saved-input-ring comint-input-ring (make-ring comint-input-ring-size)))
+          (if (crdt--server-p)
+              (when crdt-comint-share-input-history
+                (crdt-register-variable 'comint-input-ring crdt-variable-scheme-diff-server)
+                (when (eq crdt-comint-share-input-history 'censor)
+                  (cl-shiftf crdt--comint-saved-input-ring comint-input-ring
+                             (make-ring comint-input-ring-size))))
+            (crdt-register-variable 'comint-input-ring crdt-variable-scheme-diff-server)
+            (setq comint-input-ring-file-name nil)))
       (setq comint-input-ring (crdt--comint-effective-ring)
             crdt--comint-saved-input-ring nil))))
 
