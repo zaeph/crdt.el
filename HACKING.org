@@ -282,6 +282,20 @@ We then just need to design a thin protocol that communicate between local Emacs
 Since this protocol communicate only locally, the latency should be negligible, 
 therefore we use a blocking reader/writer lock based synchronization scheme.
 
+** Lock: modes of operations
+
+It turns out that I vastly over-estimated the extensibility of /The Other Editors/.
+For example, lots of them (including M$ vScoDe and cult 666) doesn't seem to have anything like =pre-command-hook=,
+making it impossible to implement a usual bidirectional locking mechanism
+(because we can't tell those editors to acquire lock from Emacs before running commands that potentially modify the buffer).
+
+Currently I implemneted a hack that by default let /The Other Editors/ hold the lock, but upon receiving
+an =acquire= from Emacs, let /The Other Editors/ dead loops to hopefully halt command execution until Emacs gives back the lock.
+Emacs thus must give back lock as soon as possible to un-hang /The Other Editors/.
+
+Q: What if Emacs GCs?
+/Q got thrown out of the window./
+
 ** Bridge protocol
 
    - Reader/writer lock
