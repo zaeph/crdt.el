@@ -2673,7 +2673,8 @@ Use CRDT--UNINSTALL-PROCESS-ADVICES to disable those advices for the rescue."
 
 (defvar crdt-comint-command-entries
   '((comint-send-input (point) (point))
-    (comint-send-region (region) (region))))
+    (comint-send-region (region) (region))
+    (comint-send-eof (point))))
 
 (crdt-register-remote-commands crdt-comint-command-entries)
 
