@@ -6,7 +6,7 @@
 ;; Maintainer: Qiantan Hong <qhong@alum.mit.edu>
 ;; URL: https://code.librehq.com/qhong/crdt.el
 ;; Keywords: collaboration crdt
-;; Version: 0.2.1
+;; Version: 0.2.2
 
 ;; This file is part of GNU Emacs.
 
@@ -2157,33 +2157,6 @@ Join with DISPLAY-NAME."
 (advice-add 'delete-overlay :around #'crdt--delete-overlay-advice)
 (advice-add 'overlay-put :around #'crdt--overlay-put-advice)
 
-;;; Org integration
-
-(define-minor-mode crdt-org-sync-overlay-mode
-  "Minor mode to synchronize hidden `org-mode' subtrees."
-  :lighter " Sync Org Overlay"
-  (if crdt-org-sync-overlay-mode
-      (progn
-        (save-excursion
-          (save-restriction
-            (widen)
-            ;; heuristic to remove existing org overlays
-            (cl-loop for ov in (overlays-in (point-min) (point-max))
-                  do (when (memq (overlay-get ov 'invisible)
-                                 '(outline org-hide-block))
-                       (delete-overlay ov)))))
-        (crdt--enable-overlay-species 'org))
-    (crdt--disable-overlay-species 'org)))
-
-(defun crdt--org-overlay-advice (orig-fun &rest args)
-  (if crdt-org-sync-overlay-mode
-      (let ((crdt--track-overlay-species 'org))
-        (apply orig-fun args))
-    (apply orig-fun args)))
-
-(cl-loop for command in '(org-cycle org-shifttab)
-      do (advice-add command :around #'crdt--org-overlay-advice))
-
 ;;; Auxillary autoload
 
 (defun crdt-register-autoload (mode feature)
@@ -2489,117 +2462,6 @@ The result DIFF can be used in (CRDT--NAPPLY-DIFF OLD DIFF) to reproduce NEW."
   (dolist (entry variable-entries)
     (crdt-unregister-variable (car entry))))
 
-;;; Built-in package integrations
-
-;; xscheme
-(defvar crdt-xscheme-command-entries
-  '((xscheme-send-region (region))
-    (xscheme-send-definition (point))
-    (xscheme-send-previous-expression (point))
-    (xscheme-send-next-expression (point))
-    (xscheme-send-current-line (point))
-    (xscheme-send-buffer)
-    (xscheme-send-char)
-    (xscheme-delete-output)
-    (xscheme-send-breakpoint-interrupt)
-    (xscheme-send-proceed)
-    (xscheme-send-control-g-interrupt)
-    (xscheme-send-control-u-interrupt)
-    (xscheme-send-control-x-interrupt)
-    (scheme-debugger-self-insert (last-command-event))))
-
-(crdt-register-remote-commands crdt-xscheme-command-entries)
-;; xscheme doesn't use standard DEFINE-*-MODE facility
-;; and doesn't call after-change-major-mode-hook.
-;; Therefore we have to hack.
-(advice-add 'scheme-interaction-mode-initialize :after 'crdt--after-change-major-mode)
-(advice-add 'scheme-debugger-mode-initialize :after
-            (lambda () ;; haxxxx!!!!
-              (let ((major-mode 'scheme-debugger-mode-initialize))
-                (crdt--after-change-major-mode))))
-;; I can't get input prompt from debugger to pop up at the right place.
-;; Because it's done asynchronously in process filter,
-;; and there seems to be no way to know the correct SPAWN-SITE-ID.
-
-;; comint
-(require 'ring)
-(defvar comint-input-ring)
-(defvar comint-input-ignoredups)
-(defvar comint-input-ring-size)
-(defvar comint-input-ring-file-name)
-
-(defvar crdt-comint-command-entries
-  '((comint-send-input (point) (point))
-    (comint-send-region (region) (region))))
-
-(crdt-register-remote-commands crdt-comint-command-entries)
-
-(crdt-register-autoload 'shell-mode 'shell)
-(crdt-register-autoload 'inferior-scheme-mode 'cmuscheme)
-(crdt-register-autoload 'inferior-python-mode 'python)
-(crdt-register-autoload 'prolog-inferior-mode 'prolog)
-(crdt-register-autoload 'inferior-lisp-mode 'inf-lisp)
-
-(put 'comint-input-ring 'crdt-variable-scheme crdt-variable-scheme-diff-server)
-
-(defcustom crdt-comint-share-input-history 'censor
-  "Share comint input history.
-If the value is 'censor,
-show only input history generated during a CRDT session to its peers,
-Merge with history generated before the session after the buffer is no longer shared."
-  :type '(choice boolean (const censor)))
-
-(defvar-local crdt--comint-saved-input-ring nil)
-
-(defun crdt--merge-ring (old-ring delta-ring nodups)
-  "Construct a new ring by merging OLD-RING and DELTA-RING.
-If NODUPS is non-nil, don't duplicate existing items in OLD-RING.
-This procedure is non-destructive."
-  (if delta-ring
-      (let ((old-ring (copy-tree old-ring t)))
-        (cl-loop for i from (1- (ring-length delta-ring)) downto 0
-              for item = (ring-ref delta-ring i)
-              do (if nodups
-                     (let ((index (ring-member old-ring item)))
-                       (when index
-                         (ring-remove old-ring index))
-                       (ring-insert old-ring item))
-                   (ring-insert old-ring item)))
-        old-ring)
-    old-ring))
-
-(defsubst crdt--comint-effective-ring ()
-  (if crdt--comint-saved-input-ring
-      (crdt--merge-ring crdt--comint-saved-input-ring comint-input-ring comint-input-ignoredups)
-    comint-input-ring))
-
-(defun crdt--comint-mode-hook ()
-  (when (derived-mode-p 'comint-mode)
-    (if crdt-mode
-        (progn
-          (add-to-list 'crdt--enabled-text-properties 'field)
-          (add-to-list 'crdt--enabled-text-properties 'front-sticky)
-          (add-to-list 'crdt--enabled-text-properties 'rear-nonsticky)
-          (if (crdt--server-p)
-              (when crdt-comint-share-input-history
-                (crdt-register-variable 'comint-input-ring crdt-variable-scheme-diff-server)
-                (when (eq crdt-comint-share-input-history 'censor)
-                  (cl-shiftf crdt--comint-saved-input-ring comint-input-ring
-                             (make-ring comint-input-ring-size))))
-            (crdt-register-variable 'comint-input-ring crdt-variable-scheme-diff-server)
-            (setq comint-input-ring-file-name nil)))
-      (setq comint-input-ring (crdt--comint-effective-ring)
-            crdt--comint-saved-input-ring nil))))
-
-(defun crdt--comint-write-input-ring-advice (orig-func)
-  (if crdt-mode
-      (let ((comint-input-ring (crdt--comint-effective-ring)))
-        (funcall orig-func))
-    (funcall orig-func)))
-
-(add-hook 'comint-mode-hook #'crdt--comint-mode-hook)
-(add-hook 'crdt-mode-hook #'crdt--comint-mode-hook)
-
 ;;; pseudo process
 
 (cl-defstruct (crdt--pseudo-process (:constructor crdt--make-pseudo-process))
@@ -2743,6 +2605,144 @@ Use CRDT--UNINSTALL-PROCESS-ADVICES to disable those advices for the rescue."
 (define-crdt-message-handler process (buffer-name string)
   (crdt--with-buffer-name buffer-name
     (process-send-string (get-buffer-process (current-buffer)) string)))
+
+;;; Built-in package integrations
+
+;; Org
+(define-minor-mode crdt-org-sync-overlay-mode
+    "Minor mode to synchronize hidden `org-mode' subtrees."
+  :lighter " Sync Org Overlay"
+  (if crdt-org-sync-overlay-mode
+      (progn
+        (save-excursion
+          (save-restriction
+            (widen)
+            ;; heuristic to remove existing org overlays
+            (cl-loop for ov in (overlays-in (point-min) (point-max))
+                  do (when (memq (overlay-get ov 'invisible)
+                                 '(outline org-hide-block))
+                       (delete-overlay ov)))))
+        (crdt--enable-overlay-species 'org))
+    (crdt--disable-overlay-species 'org)))
+
+(defun crdt--org-overlay-advice (orig-fun &rest args)
+  (if crdt-org-sync-overlay-mode
+      (let ((crdt--track-overlay-species 'org))
+        (apply orig-fun args))
+    (apply orig-fun args)))
+
+(cl-loop for command in '(org-cycle org-shifttab)
+      do (advice-add command :around #'crdt--org-overlay-advice))
+
+;; xscheme
+(defvar crdt-xscheme-command-entries
+  '((xscheme-send-region (region))
+    (xscheme-send-definition (point))
+    (xscheme-send-previous-expression (point))
+    (xscheme-send-next-expression (point))
+    (xscheme-send-current-line (point))
+    (xscheme-send-buffer)
+    (xscheme-send-char)
+    (xscheme-delete-output)
+    (xscheme-send-breakpoint-interrupt)
+    (xscheme-send-proceed)
+    (xscheme-send-control-g-interrupt)
+    (xscheme-send-control-u-interrupt)
+    (xscheme-send-control-x-interrupt)
+    (scheme-debugger-self-insert (last-command-event))))
+
+(crdt-register-remote-commands crdt-xscheme-command-entries)
+;; xscheme doesn't use standard DEFINE-*-MODE facility
+;; and doesn't call after-change-major-mode-hook.
+;; Therefore we have to hack.
+(advice-add 'scheme-interaction-mode-initialize :after 'crdt--after-change-major-mode)
+(advice-add 'scheme-debugger-mode-initialize :after
+            (lambda () ;; haxxxx!!!!
+              (let ((major-mode 'scheme-debugger-mode-initialize))
+                (crdt--after-change-major-mode))))
+;; I can't get input prompt from debugger to pop up at the right place.
+;; Because it's done asynchronously in process filter,
+;; and there seems to be no way to know the correct SPAWN-SITE-ID.
+
+;; comint
+(require 'ring)
+(defvar comint-input-ring)
+(defvar comint-input-ignoredups)
+(defvar comint-input-ring-size)
+(defvar comint-input-ring-file-name)
+
+(defvar crdt-comint-command-entries
+  '((comint-send-input (point) (point))
+    (comint-send-region (region) (region))
+    (comint-send-eof (point))))
+
+(crdt-register-remote-commands crdt-comint-command-entries)
+
+(crdt-register-autoload 'shell-mode 'shell)
+(crdt-register-autoload 'inferior-scheme-mode 'cmuscheme)
+(crdt-register-autoload 'inferior-python-mode 'python)
+(crdt-register-autoload 'prolog-inferior-mode 'prolog)
+(crdt-register-autoload 'inferior-lisp-mode 'inf-lisp)
+
+(put 'comint-input-ring 'crdt-variable-scheme crdt-variable-scheme-diff-server)
+
+(defcustom crdt-comint-share-input-history 'censor
+  "Share comint input history.
+If the value is 'censor,
+show only input history generated during a CRDT session to its peers,
+Merge with history generated before the session after the buffer is no longer shared."
+  :type '(choice boolean (const censor)))
+
+(defvar-local crdt--comint-saved-input-ring nil)
+
+(defun crdt--merge-ring (old-ring delta-ring nodups)
+  "Construct a new ring by merging OLD-RING and DELTA-RING.
+If NODUPS is non-nil, don't duplicate existing items in OLD-RING.
+This procedure is non-destructive."
+  (if delta-ring
+      (let ((old-ring (copy-tree old-ring t)))
+        (cl-loop for i from (1- (ring-length delta-ring)) downto 0
+              for item = (ring-ref delta-ring i)
+              do (if nodups
+                     (let ((index (ring-member old-ring item)))
+                       (when index
+                         (ring-remove old-ring index))
+                       (ring-insert old-ring item))
+                   (ring-insert old-ring item)))
+        old-ring)
+    old-ring))
+
+(defsubst crdt--comint-effective-ring ()
+  (if crdt--comint-saved-input-ring
+      (crdt--merge-ring crdt--comint-saved-input-ring comint-input-ring comint-input-ignoredups)
+    comint-input-ring))
+
+(defun crdt--comint-mode-hook ()
+  (when (derived-mode-p 'comint-mode)
+    (if crdt-mode
+        (progn
+          (add-to-list 'crdt--enabled-text-properties 'field)
+          (add-to-list 'crdt--enabled-text-properties 'front-sticky)
+          (add-to-list 'crdt--enabled-text-properties 'rear-nonsticky)
+          (if (crdt--server-p)
+              (when crdt-comint-share-input-history
+                (crdt-register-variable 'comint-input-ring crdt-variable-scheme-diff-server)
+                (when (eq crdt-comint-share-input-history 'censor)
+                  (cl-shiftf crdt--comint-saved-input-ring comint-input-ring
+                             (make-ring comint-input-ring-size))))
+            (crdt-register-variable 'comint-input-ring crdt-variable-scheme-diff-server)
+            (setq comint-input-ring-file-name nil)))
+      (setq comint-input-ring (crdt--comint-effective-ring)
+            crdt--comint-saved-input-ring nil))))
+
+(defun crdt--comint-write-input-ring-advice (orig-func)
+  (if crdt-mode
+      (let ((comint-input-ring (crdt--comint-effective-ring)))
+        (funcall orig-func))
+    (funcall orig-func)))
+
+(add-hook 'comint-mode-hook #'crdt--comint-mode-hook)
+(add-hook 'crdt-mode-hook #'crdt--comint-mode-hook)
 
 (provide 'crdt)
 ;;; crdt.el ends here
