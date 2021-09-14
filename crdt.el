@@ -1667,14 +1667,15 @@ Handle received STRING from PROCESS."
       ;; generate a clear cursor message and a clear contact message
       (let* ((client-id (process-get client 'client-id))
              (clear-contact-message `(contact ,client-id nil)))
-        (let ((crdt--process client))
-          (crdt-process-message-1 clear-contact-message))
-        (maphash
-         (lambda (k _)
-           (let ((crdt--process client))
-             (crdt-process-message-1 `(cursor ,k ,client-id 1 nil 1 nil))))
-         (crdt--session-buffer-table crdt--session))
-        (crdt--refresh-users-maybe))
+        (when client-id ; we only do stuff if actually a CRDT client disconnect, not some spider/scanner etc
+          (let ((crdt--process client))
+            (crdt-process-message-1 clear-contact-message))
+          (maphash
+           (lambda (k _)
+             (let ((crdt--process client))
+               (crdt-process-message-1 `(cursor ,k ,client-id 1 nil 1 nil))))
+           (crdt--session-buffer-table crdt--session))
+          (crdt--refresh-users-maybe)))
       (when (process-buffer client) (kill-buffer (process-buffer client))))))
 
 (defun crdt--client-process-sentinel (process _message)
