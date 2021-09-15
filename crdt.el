@@ -291,7 +291,7 @@ Must be used inside CRDT--WITH-INSERTION-INFORMATION."
   network-process
   network-clients
   next-client-id
-  buffer-table
+  buffer-table ; maps buffer network name to buffer
   follow-site-id)
 
 (defvar crdt--inhibit-update nil "When set, don't call CRDT--LOCAL-* on change.
@@ -463,6 +463,14 @@ Also set CRDT--PSEUDO-CURSOR-TABLE to NIL."
 
 (define-error 'crdt-sync-error "CRDT synchronization error")
 
+(defsubst crdt--server-p (&optional session)
+  "Tell if SESSION is running as a server.
+If SESSION is nil, use current CRDT--SESSION."
+  (process-contact
+   (crdt--session-network-process
+    (or session crdt--session))
+   :server))
+
 (defmacro crdt--with-recover (&rest body)
   "When any error in BODY occur, signal a CRDT-SYNC-ERROR instead.
 This will hopefully trigger error recovery mechanism when further unwinding the stack."
@@ -504,14 +512,6 @@ If we are the server, ERR is the error we shall report to client."
      (crdt--format-message `(get ,crdt--buffer-network-name)))))
 
 ;;; Shared buffer utils
-
-(defsubst crdt--server-p (&optional session)
-  "Tell if SESSION is running as a server.
-If SESSION is nil, use current CRDT--SESSION."
-  (process-contact
-   (crdt--session-network-process
-    (or session crdt--session))
-   :server))
 
 (defmacro crdt--with-buffer-name (name &rest body)
   "Find CRDT shared buffer associated with NAME and evaluate BODY in it.
@@ -560,22 +560,61 @@ after synchronization is completed."
 
 ;;; Session menu
 
-(defun crdt--session-menu-goto ()
-  "Open the buffer menu for the session under point in CRDT session menu."
-  (interactive)
-  (let ((crdt--session (tabulated-list-get-id)))
-    (crdt-list-buffers)))
+(defsubst crdt--get-session-names (server)
+  "Get session names for CRDT sessions (as in CRDT--SESSION-LIST).
+If SERVER is non-NIL, return the list of names for server sessions.
+Otherwise, return the list of names for client sessions."
+  (let (session-names)
+    (dolist (session crdt--session-list)
+      (when (eq (crdt--server-p session) server)
+        (push (crdt--session-name session) session-names)))
+    (nreverse session-names)))
 
-(defun crdt--session-menu-kill ()
-  "Kill the session under point in CRDT session menu."
-  (interactive)
-  (crdt--stop-session (tabulated-list-get-id)))
+(defsubst crdt--get-session (name)
+  "Get the CRDT session object with NAME."
+  (cl-find name crdt--session-list
+           :test 'equal :key #'crdt--session-name))
+
+(defun crdt--read-session (&optional filter)
+  "Prompt for a session name and return the corresponding session.
+FILTER can be nil, 'server or 'client."
+  (crdt--get-session
+   (completing-read (format "Choose a%s session: "
+                            (cl-ecase filter
+                              ((server) " server")
+                              ((client) " client")
+                              ((nil) "")))
+                    (cl-ecase filter
+                      ((server) (crdt--get-session-names t))
+                      ((client) (crdt--get-session-names nil))
+                      ((nil) (mapcar #'crdt--session-name crdt--session-list)))
+                    nil t
+                    (when (and crdt--session
+                               (cl-ecase filter
+                                 ((server) (crdt--server-p))
+                                 ((client) (not (crdt--server-p)))
+                                 ((nil) t)))
+                      (crdt--session-name crdt--session)))))
+
+(defun crdt--read-session-maybe (&optional filter)
+  "Prompt for a session name and return the corresponding session.
+Directly return the session name under point if in the session menu.
+FILTER can be nil, 'server or 'client."
+  (if (eq major-mode 'crdt-session-menu-mode)
+      (or (tabulated-list-get-id) (signal 'quit nil))
+    (if (and crdt--session
+             (cl-ecase filter
+               ((server) (crdt--server-p))
+               ((client) (not (crdt--server-p)))
+               ((nil) t)))
+        crdt--session
+      (or (crdt--read-session filter) (signal 'quit nil)))))
 
 (defvar crdt-session-menu-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "RET") #'crdt--session-menu-goto)
-    (define-key map [mouse-1] #'crdt--session-menu-goto)
-    (define-key map (kbd "k") #'crdt--session-menu-kill)
+    (define-key map (kbd "RET") #'crdt-list-buffers)
+    (define-key map [mouse-1] #'crdt-list-buffers)
+    (define-key map (kbd "k") #'crdt--stop-session)
     map))
 
 (define-derived-mode crdt-session-menu-mode tabulated-list-mode
@@ -631,28 +670,39 @@ If DISPLAY-BUFFER is provided, display the output there."
 
 ;;; Buffer menu
 
-(defun crdt--buffer-menu-goto ()
-  "Open the buffer under point in CRDT buffer menu."
-  (interactive)
-  (let ((name (tabulated-list-get-id)))
-    (crdt--with-buffer-name-pull name
-      (switch-to-buffer-other-window (current-buffer)))))
+(defun crdt--read-buffer (session)
+  "Prompt for a buffer network name in SESSION."
+  (completing-read "Choose a buffer: "
+                   (hash-table-keys (crdt--session-buffer-table session))
+                   nil t
+                   (when (and (eq crdt--session session)
+                              crdt--buffer-network-name)
+                     crdt--buffer-network-name)))
 
-(defun crdt--buffer-menu-kill ()
-  "Stop sharing the buffer under point in CRDT buffer menu.
-Only server can perform this action."
-  (interactive)
-  (if (crdt--server-p)
-      (let ((name (tabulated-list-get-id)))
-        (crdt--with-buffer-name name
-          (crdt-stop-share-buffer)))
-    (message "Only server can stop sharing a buffer.")))
+(defun crdt--read-buffer-maybe (session)
+  "Prompt for a buffer network name in SESSION.
+Directly return the buffer network name under point if in the buffer menu."
+  (or (and (eq crdt--session session)
+           (if (eq major-mode 'crdt-buffer-menu-mode)
+               (or (tabulated-list-get-id) (signal 'quit nil))
+             crdt--buffer-network-name))
+      (crdt--read-buffer session)
+      (signal 'quit nil)))
+
+(defun crdt-switch-to-buffer-other-window (session network-name)
+  "Open buffer with NETWORK-NAME in SESSION."
+  (interactive
+   (let ((session (crdt--read-session-maybe)))
+     (list session (crdt--read-buffer-maybe session))))
+  (let ((crdt--session session))
+    (crdt--with-buffer-name-pull network-name
+      (switch-to-buffer-other-window (current-buffer)))))
 
 (defvar crdt-buffer-menu-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "RET") #'crdt--buffer-menu-goto)
-    (define-key map [mouse-1] #'crdt--buffer-menu-goto)
-    (define-key map (kbd "k") #'crdt--buffer-menu-kill)
+    (define-key map (kbd "RET") #'crdt-switch-to-buffer-other-window)
+    (define-key map [mouse-1] #'crdt-switch-to-buffer-other-window)
+    (define-key map (kbd "k") #'crdt-stop-share-buffer)
     map))
 
 (define-derived-mode crdt-buffer-menu-mode tabulated-list-mode
@@ -662,25 +712,23 @@ Only server can perform this action."
                                ("Users" 15 t)]))
 
 ;;;###autoload
-(defun crdt-list-buffers (&optional crdt-buffer display-buffer)
-  "Display a list of buffers shared in the current CRDT session.
-If DISPLAY-BUFFER is provided, display the output there.
-Otherwise use a dedicated buffer for displaying active users on CRDT-BUFFER."
-  (interactive)
-  (with-current-buffer (or crdt-buffer (current-buffer))
-    (unless crdt--session
-      (error "Not a CRDT shared buffer"))
-    (unless display-buffer
+(defun crdt-list-buffers (&optional session)
+  "Display a list of buffers shared in SESSION."
+  (interactive (list (crdt--read-session-maybe)))
+  (let ((crdt--session (or session crdt--session)))
+    (with-current-buffer (current-buffer)
+      (unless crdt--session
+        (error "Not a CRDT shared buffer"))
       (unless (and (crdt--session-buffer-menu-buffer crdt--session) (buffer-live-p (crdt--session-buffer-menu-buffer crdt--session)))
         (setf (crdt--session-buffer-menu-buffer crdt--session)
               (generate-new-buffer (concat (crdt--session-name crdt--session)
                                            " buffers")))
         (crdt--assimilate-session (crdt--session-buffer-menu-buffer crdt--session)))
-      (setq display-buffer (crdt--session-buffer-menu-buffer crdt--session)))
-    (crdt-refresh-buffers display-buffer)
-    (if (crdt--session-network-process crdt--session)
-        (switch-to-buffer display-buffer)
-      (switch-to-buffer-other-window display-buffer))))
+      (let ((display-buffer (crdt--session-buffer-menu-buffer crdt--session)))
+        (crdt-refresh-buffers display-buffer)
+        (if (crdt--session-network-process crdt--session)
+            (switch-to-buffer display-buffer)
+          (switch-to-buffer-other-window display-buffer))))))
 
 (defun crdt-refresh-buffers (display-buffer)
   "Refresh the CRDT buffer menu in DISPLAY-BUFFER."
@@ -714,49 +762,71 @@ Otherwise use a dedicated buffer for displaying active users on CRDT-BUFFER."
 
 ;;; User menu
 
-(defun crdt--user-menu-goto ()
-  "Goto the cursor location of the user under point in CRDT user menu."
-  (interactive)
-  (let ((site-id (tabulated-list-get-id)))
+(defun crdt--read-user (session)
+  "Prompt for a user name in SESSION."
+  ;; TODO: handle duplicated names
+  (let (site-id
+        (name
+         (completing-read "Choose a user: "
+                          (mapcar #'crdt--contact-metadata-display-name
+                                  (hash-table-values (crdt--session-contact-table session)))
+                          nil t)))
+    (maphash
+     (lambda (k v)
+       (when (string-equal (crdt--contact-metadata-display-name v) name)
+         (setq site-id k)))
+     (crdt--session-contact-table session))
+    site-id))
+
+(defun crdt--read-user-maybe (session)
+  "Prompt for a user name in SESSION.
+Directly return the user name under point if in the user menu."
+  (or (and (eq crdt--session session)
+           (eq major-mode 'crdt-user-menu-mode)
+           (or (tabulated-list-get-id) (signal 'quit nil)))
+      (crdt--read-user session)
+      (signal 'quit nil)))
+
+(defun crdt-goto-user (session site-id)
+  "Goto the cursor location of user with SITE-ID in SESSION."
+  (interactive (let ((session (crdt--read-session-maybe)))
+                 (list session (crdt--read-user-maybe session))))
+  (let ((crdt--session session))
     (if (eq site-id (crdt--session-local-id crdt--session))
-        (switch-to-buffer-other-window
+        (funcall (if (eq major-mode 'crdt-user-menu-mode)
+                     #'switch-to-buffer-other-window
+                   #'switch-to-buffer)
          (gethash (crdt--session-focused-buffer-name crdt--session) (crdt--session-buffer-table crdt--session)))
       (unless
           (cl-block nil
             (let* ((metadata (or (gethash site-id (crdt--session-contact-table crdt--session)) (cl-return)))
                    (buffer-name (or (crdt--contact-metadata-focused-buffer-name metadata) (cl-return))))
               (crdt--with-buffer-name-pull buffer-name
-		(switch-to-buffer-other-window (current-buffer))
-		(ignore-errors (goto-char (overlay-start (car (gethash site-id crdt--pseudo-cursor-table)))))
-		t)))
+	        (switch-to-buffer-other-window (current-buffer))
+	        (ignore-errors (goto-char (overlay-start (car (gethash site-id crdt--pseudo-cursor-table)))))
+	        t)))
         (message "Doesn't have position information for this user yet.")))))
 
-(defun crdt--user-menu-kill ()
-  "Disconnect the user under point in CRDT user menu.
+(defun crdt-kill-user (session site-id)
+  "Disconnect the user with SITE-ID in SESSION.
 Only server can perform this action."
-  (interactive)
-  (if (crdt--server-p)
-      (let ((site-id (tabulated-list-get-id)))
+  (interactive (let ((session (crdt--read-session-maybe 'server)))
+                 (list session (crdt--read-user-maybe session))))
+  (let ((crdt--session session))
+    (if (crdt--server-p)
         (if (eq site-id (crdt--session-local-id crdt--session))
             (error "Suicide is not allowed")
           (dolist (p (process-list))
             (when (eq (process-get p 'client-id) site-id)
-              (delete-process p)))))
-    (message "Only server can disconnect a user.")))
-
-(defun crdt-stop-follow ()
-  (message "Stop following %s."
-           (crdt--contact-metadata-display-name
-            (gethash (crdt--session-follow-site-id crdt--session)
-                     (crdt--session-contact-table crdt--session))))
-  (setf (crdt--session-follow-site-id crdt--session) nil))
+              (delete-process p))))
+      (message "Only server can disconnect a user."))))
 
 (defvar crdt-user-menu-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "RET") #'crdt--user-menu-goto)
-    (define-key map [mouse-1] #'crdt--user-menu-goto)
-    (define-key map (kbd "k") #'crdt--user-menu-kill)
-    (define-key map (kbd "f") #'crdt--user-menu-follow)
+    (define-key map (kbd "RET") #'crdt-goto-user)
+    (define-key map [mouse-1] #'crdt-goto-user)
+    (define-key map (kbd "k") #'crdt-kill-user)
+    (define-key map (kbd "f") #'crdt-follow-user)
     map))
 
 (define-derived-mode crdt-user-menu-mode tabulated-list-mode
@@ -767,23 +837,20 @@ Only server can perform this action."
                                ("Address" 15 t)]))
 
 ;;;###autoload
-(defun crdt-list-users (&optional crdt-buffer display-buffer)
-  "Display a list of active users working on a CRDT-shared session.
-Find the session in CRDT-BUFFER if non NIL, or current buffer.
-If DISPLAY-BUFFER is provided, display the output there.
-Otherwise create a dedicated buffer."
-  (interactive)
-  (with-current-buffer (or crdt-buffer (current-buffer))
-    (unless crdt--session
-      (error "Not a CRDT shared buffer"))
-    (unless display-buffer
+(defun crdt-list-users (&optional session)
+  "Display a list of active users working on a SESSION."
+  (interactive (list (crdt--read-session-maybe)))
+  (let ((crdt--session session))
+    (with-current-buffer (current-buffer)
+      (unless crdt--session
+        (error "Not a CRDT shared buffer"))
       (unless (and (crdt--session-user-menu-buffer crdt--session) (buffer-live-p (crdt--session-user-menu-buffer crdt--session)))
         (setf (crdt--session-user-menu-buffer crdt--session)
               (generate-new-buffer (concat (crdt--session-name crdt--session) " users")))
         (crdt--assimilate-session (crdt--session-user-menu-buffer crdt--session)))
-      (setq display-buffer (crdt--session-user-menu-buffer crdt--session)))
-    (crdt-refresh-users display-buffer)
-    (switch-to-buffer-other-window display-buffer)))
+      (let ((display-buffer (crdt--session-user-menu-buffer crdt--session)))
+        (crdt-refresh-users display-buffer)
+        (switch-to-buffer-other-window display-buffer)))))
 
 (defun crdt-refresh-users (display-buffer)
   "Refresh the CRDT user menu in DISPLAY-BUFFER."
@@ -821,16 +888,26 @@ Otherwise create a dedicated buffer."
     (crdt-refresh-users (crdt--session-user-menu-buffer crdt--session)))
   (crdt--refresh-buffers-maybe))
 
-(defun crdt--user-menu-follow ()
-  "Toggle following the user under point in CRDT user menu."
-  (interactive)
-  (let ((site-id (tabulated-list-get-id)))
+(defun crdt-follow-user (session site-id)
+  "Toggle following user with SITE-ID in SESSION."
+  (interactive (let ((session (crdt--read-session-maybe)))
+                 (list session (crdt--read-user-maybe session))))
+  (let ((crdt--session session))
     (if (eq site-id (crdt--session-local-id crdt--session))
         (error "Narcissism is not allowed")
       (if (eq site-id (crdt--session-follow-site-id crdt--session))
           (crdt-stop-follow)
         (setf (crdt--session-follow-site-id crdt--session) site-id))
       (crdt--refresh-users-maybe))))
+
+(defun crdt-stop-follow ()
+  "Stop following user if any."
+  (interactive)
+  (message "Stop following %s."
+           (crdt--contact-metadata-display-name
+            (gethash (crdt--session-follow-site-id crdt--session)
+                     (crdt--session-contact-table crdt--session))))
+  (setf (crdt--session-follow-site-id crdt--session) nil))
 
 (defun crdt--kill-buffer-hook ()
   "Kill buffer hook for CRDT shared buffers.
@@ -1654,8 +1731,7 @@ Handle received STRING from PROCESS."
                       (process-contact process :host) (process-contact process :service))
              (if (crdt--server-p)
                  (delete-process process)
-               (crdt--stop-session crdt--session))))
-          )))))
+               (crdt--stop-session crdt--session)))))))))
 
 (defun crdt--server-process-sentinel (client _message)
   (let ((crdt--session (process-get client 'crdt-session)))
@@ -1720,21 +1796,6 @@ SESSION-NAME if provided is used in the prompt."
         (crdt--refresh-sessions-maybe))
     (error "Only server can add new buffer")))
 
-(defsubst crdt--get-session-names (server)
-  "Get session names for CRDT sessions (as in CRDT--SESSION-LIST).
-If SERVER is non-NIL, return the list of names for server sessions.
-Otherwise, return the list of names for client sessions."
-  (let (session-names)
-    (dolist (session crdt--session-list)
-      (when (eq (crdt--server-p session) server)
-        (push (crdt--session-name session) session-names)))
-    (nreverse session-names)))
-
-(defsubst crdt--get-session (name)
-  "Get the CRDT session object with NAME."
-  (cl-find name crdt--session-list
-           :test 'equal :key #'crdt--session-name))
-
 ;;;###autoload
 (defun crdt-share-buffer (session-name &optional port)
   "Share the current buffer in the CRDT session with name SESSION-NAME.
@@ -1764,15 +1825,17 @@ of the current buffer."
           (error "Port must be a number"))
         (crdt--share-buffer (current-buffer) (crdt-new-session port session-name))))))
 
-(defun crdt-stop-share-buffer ()
-  "Stop sharing the current buffer."
-  (interactive)
-  (if crdt--session
-      (if (crdt--server-p)
-          (let ((buffer-name crdt--buffer-network-name))
-            (let ((remove-message `(remove ,buffer-name)))
-              (crdt-process-message-1 remove-message)))
-        (message "Only server can stop sharing a buffer."))
+(cl-defun crdt-stop-share-buffer (&optional (session crdt--session)
+                                 (network-name crdt--buffer-network-name))
+  "Stop sharing buffer with NETWORK-NAME in SESSION."
+  (interactive (let ((session (crdt--read-session-maybe 'server)))
+                 (list session (crdt--read-buffer-maybe session))))
+  (if session
+      (let ((crdt--session session))
+        (if (crdt--server-p)
+            (let ((remove-message `(remove ,network-name)))
+              (crdt-process-message-1 remove-message))
+          (message "Only server can stop sharing a buffer.")))
     (message "Not a CRDT shared buffer.")))
 
 (defun crdt-new-session (port session-name &optional password display-name)
@@ -1822,8 +1885,8 @@ Setup up the server with PASSWORD and assign this Emacs DISPLAY-NAME."
     new-session))
 
 (defun crdt--stop-session (session)
-  "Kill the CRDT SESSION.
-Disconnect if it's a client session, or stop serving if it's a server session."
+  "Kill the CRDT SESSION."
+  (interactive (crdt--read-session-maybe 'server))
   (when (if (and crdt-confirm-disconnect
                  (crdt--server-p session)
                  (crdt--session-network-clients session))
@@ -1858,18 +1921,12 @@ Disconnect if it's a client session, or stop serving if it's a server session."
         (interrupt-process proxy-process)))
     (message "Disconnected.")))
 
-(defun crdt-stop-session (&optional session-name)
-  "Stop sharing the session with SESSION-NAME.
-If SESSION-NAME is nil, stop sharing the current session."
+(defun crdt-stop-session (&optional session)
+  "Stop sharing the SESSION.
+If SESSION is nil, stop sharing the current session."
   (interactive
-   (list (completing-read "Choose a server session: "
-                          (crdt--get-session-names t) nil t
-                          (when (and crdt--session (crdt--server-p))
-                            (crdt--session-name crdt--session)))))
-  (let ((session (if session-name
-                     (crdt--get-session session-name)
-                   crdt--session)))
-    (crdt--stop-session session)))
+   (list (crdt--read-session-maybe 'server)))
+  (crdt--stop-session session))
 
 (defun crdt-copy-url (&optional session-name)
   "Copy the url for the session with SESSION-NAME.
@@ -1898,18 +1955,12 @@ Currently this only work if a tuntox proxy is used."
           (message "URL copied."))
       (message "No known URL to copy, find out your public IP address yourself!"))))
 
-(defun crdt-disconnect (&optional session-name)
-  "Disconnect from the session with SESSION-NAME.
-If SESSION-NAME is nil, disconnect from the current session."
+(defun crdt-disconnect (&optional session)
+  "Disconnect from client SESSION.
+If SESSION is nil, disconnect from the current session."
   (interactive
-   (list (completing-read "Choose a client session: "
-                          (crdt--get-session-names nil) nil t
-                          (when (and crdt--session (not (crdt--server-p crdt--session)))
-                            (crdt--session-name crdt--session)))))
-  (let ((session (if session-name
-                     (crdt--get-session session-name)
-                   crdt--session)))
-    (crdt--stop-session session)))
+   (list (crdt--read-session-maybe 'client)))
+  (crdt--stop-session session))
 
 (defvar crdt-connect-url-history nil)
 
