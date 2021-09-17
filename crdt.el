@@ -6,7 +6,7 @@
 ;; Maintainer: Qiantan Hong <qhong@alum.mit.edu>
 ;; URL: https://code.librehq.com/qhong/crdt.el
 ;; Keywords: collaboration crdt
-;; Version: 0.2.3
+;; Version: 0.2.4
 
 ;; This file is part of GNU Emacs.
 
@@ -2535,12 +2535,14 @@ The result DIFF can be used in (CRDT--NAPPLY-DIFF OLD DIFF) to reproduce NEW."
     (funcall orig-func process start end)))
 
 (defun crdt--get-buffer-process-advice (orig-func buffer)
-  (and buffer
-       (setq buffer (get-buffer buffer))
-       (with-current-buffer buffer
-         (or (funcall orig-func buffer)
-             (and crdt--session (not (crdt--server-p))
-                  crdt--buffer-pseudo-process)))))
+  (or (funcall orig-func buffer)
+      (and buffer
+           (setq buffer (get-buffer buffer))
+           (buffer-live-p buffer)
+           (with-current-buffer buffer
+             (or (funcall orig-func buffer)
+                 (and crdt--session (not (crdt--server-p))
+                      crdt--buffer-pseudo-process))))))
 
 (defun crdt--get-process-advice (orig-func name)
   (if (crdt--pseudo-process-p name)
