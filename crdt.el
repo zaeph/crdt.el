@@ -1625,8 +1625,8 @@ CRDT--PROCESS should be bound to The network process for the client connection."
             (with-current-buffer buffer
               (crdt-mode 0)
               (setq crdt--session nil))))))
-   (message "Server stopped sharing %s."
-            (mapconcat #'identity buffer-names ", "))
+   (warn "Server stopped sharing %s."
+         (mapconcat #'identity buffer-names ", "))
    (let ((crdt--session saved-session))
      (crdt--broadcast-maybe crdt--message-string
                             (when crdt--process
