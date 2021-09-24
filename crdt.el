@@ -486,16 +486,13 @@ NAME is included in the report."
   `(condition-case err
        (progn ,@ body)
      (error
-      (ding)
-      (message "Error happens inside %s. This should never happen, please file a report to crdt.el maintainers." ',name)
-      (message " Error: %s" err)
+      (warn "CRDT mode exited in buffer %s because of error %s inside %s."
+            (current-buffer) err ',name)
       (if (crdt--server-p)
-          (progn
-            (message "Stop sharing the buffer because of error.")
-            (crdt-stop-share-buffer))
-        (progn
-          (message "Killing the buffer because of error.")
-          (kill-buffer))))))
+          (crdt-stop-share-buffer)
+        (remhash crdt--buffer-network-name (crdt--session-buffer-table crdt--session))
+        (crdt--refresh-buffers-maybe)
+        (crdt-mode -1)))))
 
 (defun crdt--recover (&optional err)
   "Try to recover from a synchronization failure.
@@ -1625,8 +1622,14 @@ CRDT--PROCESS should be bound to The network process for the client connection."
             (with-current-buffer buffer
               (crdt-mode 0)
               (setq crdt--session nil))))))
-   (message "Server stopped sharing %s."
-            (mapconcat #'identity buffer-names ", "))
+    (let ((notify-names
+           (cl-remove-if-not
+            (lambda (buffer-name)
+              (gethash buffer-name (crdt--session-buffer-table crdt--session)))
+            buffer-names)))
+      (when notify-names
+        (warn "Server stopped sharing %s."
+              (mapconcat #'identity buffer-names ", "))))
    (let ((crdt--session saved-session))
      (crdt--broadcast-maybe crdt--message-string
                             (when crdt--process
@@ -1919,7 +1922,7 @@ Setup up the server with PASSWORD and assign this Emacs DISPLAY-NAME."
         (kill-buffer process-buffer))
       (when (and proxy-process (process-live-p proxy-process))
         (interrupt-process proxy-process)))
-    (message "Disconnected.")))
+    (warn "CRDT session disconnected.")))
 
 (defun crdt-stop-session (&optional session)
   "Stop sharing the SESSION.
