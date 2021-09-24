@@ -1690,7 +1690,7 @@ CRDT--PROCESS should be bound to The network process for the client connection."
 Handle received STRING from PROCESS."
   (unless (and (process-buffer process)
                (buffer-live-p (process-buffer process)))
-    (set-process-buffer process (generate-new-buffer "*crdt-server*"))
+    (set-process-buffer process (generate-new-buffer " *crdt-server*"))
     (with-current-buffer (process-buffer process)
       (set-marker (process-mark process) 1)))
   (with-current-buffer (process-buffer process)
@@ -1989,7 +1989,7 @@ Join with DISPLAY-NAME."
     (cl-macrolet ((start-session (&body body)
                     `(let* ((network-process (make-network-process
                                               :name "CRDT Client"
-                                              :buffer (generate-new-buffer "*crdt-client*")
+                                              :buffer (generate-new-buffer " *crdt-client*")
                                               :host address
                                               :service port
                                               :filter #'crdt--network-filter
