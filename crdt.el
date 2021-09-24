@@ -1878,7 +1878,7 @@ Setup up the server with PASSWORD and assign this Emacs DISPLAY-NAME."
 
 (defun crdt--stop-session (session)
   "Kill the CRDT SESSION."
-  (interactive (crdt--read-session-maybe 'server))
+  (interactive (list (crdt--read-session-maybe 'server)))
   (when (if (and crdt-confirm-disconnect
                  (crdt--server-p session)
                  (crdt--session-network-clients session))
