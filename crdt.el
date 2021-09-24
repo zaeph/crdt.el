@@ -924,10 +924,6 @@ It informs other peers that the buffer is killed."
 
 ;;; CRDT insert/delete
 
-(defsubst crdt--base64-encode-maybe (str)
-  "Base64 encode STR if it's a string, or return NIL if STR is NIL."
-  (when str (base64-encode-string str)))
-
 (defsubst crdt--text-property-assimilate
     (template template-beg template-end beg prop &optional object)
   "Make PROP after BEG in OBJECT the same as part of TEMPLATE.
@@ -971,7 +967,7 @@ Returns a list of (insert type) messages to be sent."
               (let ((virtual-id (substring starting-id)))
 		(crdt--set-id-offset virtual-id (1+ left-offset))
 		(push `(insert ,crdt--buffer-network-name
-                               ,(base64-encode-string virtual-id) ,beg
+                               ,virtual-id ,beg
                                ,(crdt--buffer-substring beg merge-end))
                       resulting-commands))
               (cl-incf left-offset (- merge-end beg))
@@ -984,7 +980,7 @@ Returns a list of (insert type) messages to be sent."
                                             (crdt--session-local-id crdt--session))))
             (put-text-property beg block-end 'crdt-id (cons new-id t))
             (push `(insert ,crdt--buffer-network-name
-                           ,(base64-encode-string new-id) ,beg
+                           ,new-id ,beg
                            ,(crdt--buffer-substring beg block-end))
                   resulting-commands)
             (setq beg block-end)
@@ -1250,10 +1246,8 @@ Always return a message otherwise."
       (setq crdt--last-mark mark)
       (save-restriction
         (widen)
-        (let ((point-id-base64 (base64-encode-string (crdt--get-id point)))
-              (mark-id-base64 (when mark (base64-encode-string (crdt--get-id mark)))))
-          `(cursor ,crdt--buffer-network-name ,(crdt--session-local-id crdt--session)
-                   ,point ,point-id-base64 ,mark ,mark-id-base64))))))
+        `(cursor ,crdt--buffer-network-name ,(crdt--session-local-id crdt--session)
+                 ,point ,(crdt--get-id point) ,mark ,(when mark (crdt--get-id mark)))))))
 
 (defun crdt--post-command ()
   "Post command hook used by CRDT-MODE.
@@ -1277,8 +1271,8 @@ Send message to other peers about any changes."
 
 (defun crdt--dump-ids (beg end object &optional omit-end-of-block-p include-content)
   "Serialize all CRDT IDs in OBJECT from BEG to END into a list.
-The list contains CONSes of the form (LENGTH CRDT-ID-BASE64 END-OF-BLOCK-P),
-or (LENGTH CRDT-ID-BASE64) if OMIT-END-OF-BLOCK-P is non-NIL,
+The list contains CONSes of the form (LENGTH CRDT-ID END-OF-BLOCK-P),
+or (LENGTH CRDT-ID) if OMIT-END-OF-BLOCK-P is non-NIL,
 in the order that they appears in the document.
 If INCLUDE-CONTENT is non-NIL, the list contains STRING instead of LENGTH."
   (let (ids (pos end))
@@ -1293,8 +1287,7 @@ If INCLUDE-CONTENT is non-NIL, the list contains STRING instead of LENGTH."
                                 (t (substring object prev-pos pos)))
                         (- pos prev-pos))
                       (cl-destructuring-bind (id . eob) (crdt--get-crdt-id-pair prev-pos object)
-                        (let ((id-base64 (base64-encode-string id)))
-                          (if omit-end-of-block-p (list id-base64) (list id-base64 eob)))))
+                        (if omit-end-of-block-p (list id) (list id eob))))
                 ids))
         (setq pos prev-pos)))
     ids))
@@ -1304,9 +1297,8 @@ If INCLUDE-CONTENT is non-NIL, the list contains STRING instead of LENGTH."
 into current buffer."
   (goto-char (point-min))
   (dolist (id-item ids)
-    (cl-destructuring-bind (content id-base64 eob) id-item
-      (insert (propertize content 'crdt-id
-                          (cons (base64-decode-string id-base64) eob))))))
+    (cl-destructuring-bind (content id eob) id-item
+      (insert (propertize content 'crdt-id (cons id eob))))))
 
 (defun crdt--verify-buffer ()
   "Debug helper function.
@@ -1432,11 +1424,11 @@ The overlay is FRONT-ADVANCE and REAR-ADVANCE, and lies between BEG and END."
   `(overlay-add ,crdt--buffer-network-name ,id ,clock
                 ,species ,front-advance ,rear-advance
                 ,beg ,(if front-advance
-                          (base64-encode-string (crdt--get-id beg))
-                        (crdt--base64-encode-maybe (crdt--get-id (1- beg))))
+                          (crdt--get-id beg)
+                        (crdt--get-id (1- beg)))
                 ,end ,(if rear-advance
-                          (base64-encode-string (crdt--get-id end))
-                        (crdt--base64-encode-maybe (crdt--get-id (1- end))))))
+                          (crdt--get-id end)
+                        (crdt--get-id (1- end)))))
 
 (defsubst crdt--generate-challenge ()
   "Generate a challenge string for authentication."
@@ -1463,13 +1455,12 @@ CRDT--PROCESS should be bound to The network process for the client connection."
                          (region-end (overlay-end region-ov))
                          (mark (if (eq point region-beg)
                                    (unless (eq point region-end) region-end)
-                                 region-beg))
-                         (point-id-base64 (base64-encode-string (crdt--get-id point)))
-                         (mark-id-base64 (when mark (base64-encode-string (crdt--get-id mark)))))
+                                 region-beg)))
                     (process-send-string crdt--process
                                          (crdt--format-message
                                           `(cursor ,crdt--buffer-network-name ,site-id
-                                                   ,point ,point-id-base64 ,mark ,mark-id-base64))))))
+                                                   ,point ,(crdt--get-id point)
+                                                   ,mark ,(crdt--get-id mark)))))))
               crdt--pseudo-cursor-table)
      (process-send-string crdt--process (crdt--format-message (crdt--local-cursor nil)))
 
@@ -1541,24 +1532,22 @@ CRDT--PROCESS should be bound to The network process for the client connection."
 (define-crdt-message-handler insert (buffer-name crdt-id position-hint content)
   (crdt--with-buffer-name buffer-name
     (crdt--with-recover
-        (crdt--remote-insert (base64-decode-string crdt-id) position-hint content)))
+        (crdt--remote-insert crdt-id position-hint content)))
   (crdt--broadcast-maybe crdt--message-string (process-get crdt--process 'client-id)))
 
-(define-crdt-message-handler delete (buffer-name position-hint . id-base64-pairs)
-  (mapc (lambda (p) (rplaca (cdr p) (base64-decode-string (cadr p)))) id-base64-pairs)
+(define-crdt-message-handler delete (buffer-name position-hint . id-pairs)
+  (mapc (lambda (p) (rplaca (cdr p) (cadr p))) id-pairs)
   (crdt--with-buffer-name buffer-name
     (crdt--with-recover
-        (crdt--remote-delete position-hint id-base64-pairs)))
+        (crdt--remote-delete position-hint id-pairs)))
   (crdt--broadcast-maybe crdt--message-string (process-get crdt--process 'client-id)))
 
 (define-crdt-message-handler cursor
     (buffer-name site-id point-position-hint point-crdt-id mark-position-hint mark-crdt-id)
   (crdt--with-buffer-name buffer-name
     (crdt--with-recover
-        (crdt--remote-cursor site-id point-position-hint
-                             (and point-crdt-id (base64-decode-string point-crdt-id))
-                             mark-position-hint
-                             (and mark-crdt-id (base64-decode-string mark-crdt-id)))))
+        (crdt--remote-cursor site-id point-position-hint point-crdt-id
+                             mark-position-hint mark-crdt-id)))
   (crdt--broadcast-maybe crdt--message-string (process-get crdt--process 'client-id)))
 
 (define-crdt-message-handler get (buffer-name)
@@ -2102,12 +2091,12 @@ Join with DISPLAY-NAME."
 
 (define-crdt-message-handler overlay-add
     (buffer-name site-id logical-clock species
-               front-advance rear-advance start-hint start-id-base64 end-hint end-id-base64)
+               front-advance rear-advance start-hint start-id end-hint end-id)
   (crdt--with-buffer-name buffer-name
     (crdt--with-recover
         (let* ((crdt--track-overlay-species nil)
-               (start (crdt--find-id (base64-decode-string start-id-base64) start-hint front-advance))
-               (end (crdt--find-id (base64-decode-string end-id-base64) end-hint rear-advance))
+               (start (crdt--find-id start-id start-hint front-advance))
+               (end (crdt--find-id end-id end-hint rear-advance))
                (new-overlay
                 (make-overlay start end nil front-advance rear-advance))
                (key (cons site-id logical-clock))
@@ -2131,16 +2120,16 @@ Join with DISPLAY-NAME."
              (crdt--format-message
               `(overlay-move ,crdt--buffer-network-name ,(car key) ,(cdr key)
                              ,beg ,(if front-advance
-                                       (base64-encode-string (crdt--get-id beg))
-                                     (crdt--base64-encode-maybe (crdt--get-id (1- beg))))
+                                       (crdt--get-id beg)
+                                     (crdt--get-id (1- beg)))
                              ,end ,(if rear-advance
-                                       (base64-encode-string (crdt--get-id end))
-                                     (crdt--base64-encode-maybe (crdt--get-id (1- end))))))))))))
+                                       (crdt--get-id end)
+                                     (crdt--get-id (1- end)))))))))))
   (apply orig-fun ov beg end args))
 
-(define-crdt-message-handler overlay-mode
+(define-crdt-message-handler overlay-move
     (buffer-name site-id logical-clock
-                 start-hint start-id-base64 end-hint end-id-base64)
+                 start-hint start-id end-hint end-id)
   (crdt--with-buffer-name buffer-name
     (crdt--with-recover
         (let* ((key (cons site-id logical-clock))
@@ -2149,8 +2138,8 @@ Join with DISPLAY-NAME."
             (let* ((meta (overlay-get ov 'crdt-meta))
                    (front-advance (crdt--overlay-metadata-front-advance meta))
                    (rear-advance (crdt--overlay-metadata-rear-advance meta))
-                   (start (crdt--find-id (base64-decode-string start-id-base64) start-hint front-advance))
-                   (end (crdt--find-id (base64-decode-string end-id-base64) end-hint rear-advance)))
+                   (start (crdt--find-id start-id start-hint front-advance))
+                   (end (crdt--find-id end-id end-hint rear-advance)))
               (let ((crdt--inhibit-overlay-advices t))
                 (move-overlay ov start end)))))))
   (crdt--broadcast-maybe crdt--message-string nil))
