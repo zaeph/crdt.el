@@ -1941,7 +1941,7 @@ Setup up the server with PASSWORD and assign this Emacs DISPLAY-NAME."
         (kill-buffer process-buffer))
       (when (and proxy-process (process-live-p proxy-process))
         (interrupt-process proxy-process)))
-    (unless (memq last-command '(crdt-disconnect crdt-stop-session))
+    (unless (memq this-command '(crdt-disconnect crdt-stop-session crdt--stop-session))
       (warn "CRDT session %s disconnected." (crdt--session-name session)))))
 
 (defun crdt-stop-session (&optional session)
