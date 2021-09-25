@@ -1829,7 +1829,7 @@ of the current buffer."
                                     (cl-loop for i from 1
                                           for name = (concat crdt-default-session-name "_" (number-to-string i))
                                           unless (member name session-names)
-                                          do (return name))
+                                          do (cl-return name))
                                     crdt-default-session-name))
                   (session-name (if session-names
                                     (completing-read "Choose a server session (create if not exist): "
