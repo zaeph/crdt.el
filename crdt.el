@@ -35,6 +35,14 @@
 (require 'url)
 (require 'color)
 
+(defconst crdt-version "0.2.5")
+(defconst crdt-protocol-version "0.2.5")
+
+(defun crdt-version ()
+  "Show the crdt.el version."
+  (interactive)
+  (message crdt-version))
+
 (defgroup crdt nil
   "Collaborative editing using Conflict-free Replicated Data Types."
   :prefix "crdt-"
@@ -111,8 +119,7 @@
   "Move pseudo marked region overlay OV to mark between POS and MARK."
   (move-overlay ov (min pos mark) (max pos mark)))
 
-
-;; CRDT ID utils
+;;; CRDT ID utils
 ;; CRDT IDs are represented by unibyte strings (for efficient comparison)
 ;; Every two bytes represent a big endian encoded integer
 ;; For base IDs, last two bytes are always representing site ID
@@ -1591,9 +1598,19 @@ CRDT--PROCESS should be bound to The network process for the client connection."
 
 (define-crdt-message-handler error (buffer-name &rest err)
   (unless (crdt--server-p)
-    (crdt--with-buffer-name buffer-name
-      (message "Server side error %s." err)
-      (crdt--recover))))
+    (if buffer-name
+        (crdt--with-buffer-name buffer-name
+          (message "Server side error %s." err)
+          (crdt--recover))
+      (cl-block nil
+        (message "Server side error %s." err)
+        (when (eq (car err) 'version)
+          (if (version< crdt-protocol-version (cadr err))
+              (warn "Server uses newer crdt.el protocol (%s>%s). Please update your crdt.el to connect."
+                    (cadr err) crdt-protocol-version)
+            (warn "Server uses older crdt.el protocol (%s<%s). Please ask to update server."
+                  (cadr err) crdt-protocol-version)))
+        (crdt-disconnect)))))
 
 (define-crdt-message-handler add (&rest buffer-names)
   (dolist (buffer-name buffer-names)
@@ -1645,7 +1662,7 @@ CRDT--PROCESS should be bound to The network process for the client connection."
                              (process-contact (crdt--session-network-process crdt--session) :host)
                              (process-contact (crdt--session-network-process crdt--session) :service)))))
       (crdt--broadcast-maybe (crdt--format-message
-                              `(hello ,(crdt--session-local-name crdt--session)
+                              `(hello ,(crdt--session-local-name crdt--session) ,crdt-protocol-version
                                       ,(gnutls-hash-mac 'SHA1 password hash)))))))
 
 (define-crdt-message-handler contact (site-id display-name &optional host service)
@@ -1707,7 +1724,11 @@ Handle received STRING from PROCESS."
                     (crdt-process-message message string))
                 (cl-block nil
                   (when (eq (car message) 'hello)
-                    (cl-destructuring-bind (name &optional response) (cdr message)
+                    (cl-destructuring-bind (name protocol-version &optional response) (cdr message)
+                      (when (version< protocol-version crdt-protocol-version)
+                        (process-send-string process
+                                             (crdt--format-message `(error nil version ,crdt-protocol-version)))
+                        (cl-return))
                       (when (or (not (process-get process 'password)) ; server password is empty
                                 (and response (string-equal response (process-get process 'challenge))))
                         (process-put process 'authenticated t)
@@ -1719,7 +1740,7 @@ Handle received STRING from PROCESS."
                                  (gnutls-hash-mac 'SHA1 (substring (process-get process 'password)) challenge))
                     (process-send-string process (crdt--format-message `(challenge ,challenge))))))
             ((crdt-unrecognized-message invalid-read-syntax)
-             (message "%s error when processing message %s from %s:%s, disconnecting." err message
+             (warn "%s error when processing message %s from %s:%s, disconnecting." err message
                       (process-contact process :host) (process-contact process :service))
              (if (crdt--server-p)
                  (delete-process process)
@@ -1911,14 +1932,15 @@ Setup up the server with PASSWORD and assign this Emacs DISPLAY-NAME."
         (kill-buffer process-buffer))
       (when (and proxy-process (process-live-p proxy-process))
         (interrupt-process proxy-process)))
-    (warn "CRDT session disconnected.")))
+    (unless (memq last-command '(crdt-disconnect crdt-stop-session))
+      (warn "CRDT session %s disconnected." (crdt--session-name session)))))
 
 (defun crdt-stop-session (&optional session)
   "Stop sharing the SESSION.
 If SESSION is nil, stop sharing the current session."
   (interactive
    (list (crdt--read-session-maybe 'server)))
-  (crdt--stop-session session))
+  (crdt--stop-session (or session crdt--session)))
 
 (defun crdt-copy-url (&optional session-name)
   "Copy the url for the session with SESSION-NAME.
@@ -1952,7 +1974,7 @@ Currently this only work if a tuntox proxy is used."
 If SESSION is nil, disconnect from the current session."
   (interactive
    (list (crdt--read-session-maybe 'client)))
-  (crdt--stop-session session))
+  (crdt--stop-session (or session crdt--session)))
 
 (defvar crdt-connect-url-history nil)
 
@@ -1997,8 +2019,10 @@ Join with DISPLAY-NAME."
                       (process-put network-process 'crdt-session new-session)
                       (push new-session crdt--session-list)
                       ,@body
-                      (process-send-string network-process
-                       (crdt--format-message `(hello ,(crdt--session-local-name new-session))))
+                      (process-send-string
+                       network-process
+                       (crdt--format-message
+                        `(hello ,(crdt--session-local-name new-session) ,crdt-protocol-version)))
                       (let ((crdt--session new-session))
                         (crdt-list-buffers)))))
       (cond ((equal url-type "tcp")

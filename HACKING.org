@@ -56,7 +56,7 @@ and second last two bytes represent site ID.
   - Login
     + hello ::
       This message is sent from client to server, when a client connect to the server.
-      body takes the form =(client-name &optional response)=
+      body takes the form =(client-name protocol-version &optional response)=
 
     + leave ::
       This message is sometime sent from client to server to indicate disconnection, 
