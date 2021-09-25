@@ -1789,24 +1789,6 @@ Handle received STRING from PROCESS."
     (pushash crdt--user-id new-site-id crdt--site-id-table)
     new-site-id))
 
-(defun crdt-proxy-ambient-read (message)
-  (memq (car message) '(get)))
-
-(defun crdt-proxy-ambient-overlay (message)
-  (memq (car message) '(overlay-add overlay-move overlay-remove overlay-put)))
-
-(defun crdt-proxy-ambient-write (message)
-  (memq (car message) '(insert delete)))
-
-(defun crdt-proxy-ambient-remote-command (message)
-  (memq (car message) '(command)))
-
-(defun crdt-proxy-ambient-variable (message)
-  (memq (car message) '(var)))
-
-(defun crdt-proxy-ambient-process (message)
-  (memq (car message) '(process process-mark)))
-
 ;;; UI commands
 
 (defvar crdt--ephemeral-advices nil)
@@ -1951,10 +1933,7 @@ of the current buffer."
                  `(("Port: " (number-to-string port) ,(crdt--settings-make-ensure-type 'numberp))
                    ("Session Name: " ,session-name ,(crdt--settings-make-ensure-nonempty session-name))
                    ("Password: " "")
-                   ("Display Name: " ,crdt-default-name)
-                   ("Default Proxies: "
-                    "(crdt-proxy-ambient-read crdt-proxy-ambient-write crdt-proxy-ambient-remote-command)"
-                    ,(crdt--settings-make-ensure-type 'listp)))))))))
+                   ("Display Name: " ,crdt-default-name))))))))
 
 (cl-defun crdt-stop-share-buffer (&optional (session crdt--session)
                                  (network-name crdt--buffer-network-name))
