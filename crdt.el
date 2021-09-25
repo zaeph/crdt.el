@@ -34,7 +34,6 @@
 (require 'cl-lib)
 (require 'url)
 (require 'color)
-(require 'tramp)
 
 (defconst crdt-version "0.2.5")
 (defconst crdt-protocol-version "0.2.5")
@@ -55,6 +54,10 @@
 
 (defcustom crdt-default-name (user-full-name)
   "Default display name."
+  :type 'string)
+
+(defcustom crdt-default-session-name (format "%s_session" (user-login-name))
+  "Default session name."
   :type 'string)
 
 (defcustom crdt-ask-for-password t
@@ -548,7 +551,7 @@ after synchronization is completed."
          (with-current-buffer crdt-buffer
            ,@body)
        (unless (process-contact (crdt--session-network-process crdt--session) :server)
-         (setq crdt-buffer (create-file-buffer (concat (crdt--tramp-prefix crdt--session) ,name)))
+         (setq crdt-buffer (generate-new-buffer (format "%s<%s>" ,name (crdt--session-name crdt--session))))
          (puthash ,name crdt-buffer (crdt--session-buffer-table crdt--session))
          (let ((session crdt--session))
            (with-current-buffer crdt-buffer
@@ -1822,7 +1825,12 @@ of the current buffer."
      (when (and crdt-mode crdt--session)
        (error "Current buffer is already shared in a CRDT session"))
      (list (let* ((session-names (crdt--get-session-names t))
-                  (default-name (concat crdt-default-name ":" (buffer-name (current-buffer))))
+                  (default-name (if (member crdt-default-session-name session-names)
+                                    (cl-loop for i from 1
+                                          for name = (concat crdt-default-session-name "_" (number-to-string i))
+                                          unless (member name session-names)
+                                          do (return name))
+                                    crdt-default-session-name))
                   (session-name (if session-names
                                     (completing-read "Choose a server session (create if not exist): "
                                                      session-names)
@@ -2671,35 +2679,6 @@ Use CRDT--UNINSTALL-PROCESS-ADVICES to disable those advices for the rescue."
 (define-crdt-message-handler process (buffer-name string)
   (crdt--with-buffer-name buffer-name
     (process-send-string (get-buffer-process (current-buffer)) string)))
-
-;;; URL and TRAMP
-
-(defsubst tramp-crdt-file-name-p (filename)
-  "Check if it's a FILENAME for crdt.el."
-  (and (tramp-tramp-file-p filename)
-       (string= (tramp-file-name-method (tramp-dissect-file-name filename)) "crdt")))
-
-(defconst tramp-crdt-file-name-handler-alist '()
-  "Alist of handler functions for Tramp crdt.el method.
-Operations not mentioned here will be handled by the default Emacs primitives.")
-
-(defun tramp-crdt-file-name-handler (operation &rest args)
-  "Invoke the crdt.el handler for OPERATION and ARGS.
-First arg specifies the OPERATION, second arg is a list of arguments to
-pass to the OPERATION."
-  (if-let ((fn (assoc operation tramp-crdt-file-name-handler-alist)))
-      (save-match-data (apply (cdr fn) args))
-    (tramp-run-real-handler operation args)))
-
-(tramp-register-foreign-file-name-handler #'tramp-crdt-file-name-p #'tramp-crdt-file-name-handler)
-(add-to-list 'tramp-methods '("crdt"))
-
-(defun crdt--tramp-prefix (session)
-  "Compute TRAMP filename prefix for SESSION."
-  (let ((contact (process-contact (crdt--session-network-process session))))
-    (let ((ipv6-p (string-match-p ":" (car contact)))) ;; poor man's ipv6 test
-      (concat "/crdt:" (when ipv6-p "[") (car contact) (when ipv6-p "]")
-              (if (= (cadr contact) 6530) nil (format "#%s" (cdr contact))) ":/"))))
 
 ;;; Built-in package integrations
 
