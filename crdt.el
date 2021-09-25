@@ -42,7 +42,7 @@
 (defun crdt-version ()
   "Show the crdt.el version."
   (interactive)
-  (message crdt-version))
+  (message "crdt.el version %s" crdt-version))
 
 (defgroup crdt nil
   "Collaborative editing using Conflict-free Replicated Data Types."
