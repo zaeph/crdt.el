@@ -301,7 +301,7 @@ Must be used inside CRDT--WITH-INSERTION-INFORMATION."
   next-client-id
   buffer-table                    ; maps buffer network name to buffer
   follow-user-id
-  default-proxies)
+  user-command-functions)
 
 (defvar crdt--inhibit-update nil "When set, don't call CRDT--LOCAL-* on change.
 This is useful for functions that apply remote change to local buffer,
@@ -323,10 +323,10 @@ Each element is of the form (CURSOR-OVERLAY . REGION-OVERLAY).")
 
 (crdt--defvar-permanent-local crdt--site-id-table nil
   "A hash table that maps USER-ID to SITE-ID. Only used by the publisher of the buffer.")
+(crdt--defvar-permanent-local crdt--site-id-list nil
+  "A list of all allocated SITE-ID (except 0 which is reserved for publisher), sorted by value.")
 (crdt--defvar-permanent-local crdt--site-id-use-list nil
   "A list of all allocated SITE-ID (except 0 which is reserved for publisher), sorted by recent usage.")
-(crdt--defvar-permanent-local crdt--site-id-free-list nil
-  "A list of all free SITE-ID (except 0 which is reserved for publisher).")
 (crdt--defvar-permanent-local crdt--site-id nil "My SITE-ID at this buffer.")
 
 (cl-defstruct (crdt--overlay-metadata
@@ -361,6 +361,15 @@ adding/removing actively tracked overlays.")
 
 (defvar-local crdt--enabled-text-properties nil
   "A list of text properties that are tracked and synchronized.")
+
+(defvar-local crdt-user-command-functions nil
+  "A list that describes policies for public buffer-local commands.
+Each element should be one of
+- a symbol, which should name a command.
+  The command is be made accessible to every user.
+- a function, which should return a list of commands when
+  called with a single argument USER-ID.
+  The returned list of commands is made accessible to the user with USER-ID.")
 
 ;;; Global variables
 
@@ -1780,16 +1789,24 @@ Handle received STRING from PROCESS."
 ;;; Capabilities
 
 (defun crdt-request-site-id ()
-  (let ((new-site-id
-         (if crdt--site-id-free-list
-             (pop crdt--site-id-free-list)
-           (let* ((cons (last crdt--site-id-use-list 2))
-                  (victim-id (cadr cons)))
-             ;; todo: notify the victim
-             (rplacd cons nil)
-             victim-id))))
+  (let (new-site-id)
+    (cl-loop
+          for i in crdt--site-id-list
+          for c on crdt--site-id-list
+          for j in (cdr crdt--site-id-list)
+          if (> j (1+ i))
+          do (progn
+               (setq new-site-id (1+ i))
+               (push (1+ i) (cdr c))
+               (cl-return)))
+    (unless new-site-id
+      (let* ((cons (last crdt--site-id-use-list 2))
+             (victim-id (cadr cons)))
+        ;; todo: notify the victim
+        (rplacd cons nil)
+        (setq new-site-id victim-id)))
     (push new-site-id crdt--site-id-use-list)
-    (pushash crdt--user-id new-site-id crdt--site-id-table)
+    (puthash crdt--user-id new-site-id crdt--site-id-table)
     new-site-id))
 
 ;;; UI commands
@@ -1938,7 +1955,7 @@ of the current buffer."
          (apply #'crdt-new-session
                 (crdt--read-settings
                  (format "*Settings for %s*" session-name)
-                 `(("Port: " (number-to-string port) ,(crdt--settings-make-ensure-type 'numberp))
+                 `(("Port: " (number-to-string ,port) ,(crdt--settings-make-ensure-type 'numberp))
                    ("Session Name: " ,session-name ,(crdt--settings-make-ensure-nonempty session-name))
                    ("Password: " "")
                    ("Display Name: " ,crdt-default-name))))))))
@@ -1957,9 +1974,18 @@ of the current buffer."
     (message "Not a CRDT shared buffer.")))
 
 (defun crdt-new-session
-    (port session-name password display-name default-proxies)
-  "Start a new CRDT session on PORT with SESSION-NAME and DEFAULT-PROXIES.
-Setup up the server with PASSWORD and assign this Emacs DISPLAY-NAME."
+    (port session-name password display-name user-command-functions)
+  "Start a new CRDT session on PORT with SESSION-NAME.
+Setup up the server with PASSWORD and assign this Emacs DISPLAY-NAME.
+USER-COMMAND-FUNCTIONS is a list that describes policies
+for public session-scoped commands.
+Each element should be one of
+- a symbol, which should name a command.
+  The command is be made accessible to every user, in every buffer.
+- a function, which should return a list of commands when
+  called with two arguments USER-ID and BUFFER.
+  The returned list of commands is made accessible
+  to the user with USER-ID in BUFFER."
   (let* ((network-process (make-network-process
                            :name "CRDT Server"
                            :server t
@@ -1976,7 +2002,7 @@ Setup up the server with PASSWORD and assign this Emacs DISPLAY-NAME."
                               :buffer-table (make-hash-table :test 'equal)
                               :name session-name
                               :network-process network-process
-                              :default-proxies default-proxies))
+                              :user-command-functions user-command-functions))
          (tuntox-p (or (eq crdt-use-tuntox t)
                        (and (eq crdt-use-tuntox 'confirm)
                             (yes-or-no-p "Start a tuntox proxy for this session? ")))))
