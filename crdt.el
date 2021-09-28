@@ -1923,49 +1923,52 @@ Current user means the user corresponding to CRDT--PROCESS."
 (defun crdt--read-settings (buffer-name settings-list)
   (with-current-buffer (get-buffer-create buffer-name)
     (let ((enable-local-eval t)
-          (data-buffer (get-buffer-create (concat " " buffer-name))))
-      (let ((standard-output (current-buffer)))
-        (prin1
-         `(setq forms-file t
-                forms-number-of-fields ,(length settings-list)
-                forms-format-list
-                '(,(let ((overriding-local-map crdt-read-settings-map))
-                     (substitute-command-keys
-                      (concat "\\[forms-next-field]:Next Field, \\[forms-prev-field]:Prev Field\n"
-                              "\\[exit-recursive-edit]:OK, \\[abort-recursive-edit]:Cancel\n")))
-                  ,@(cl-loop for i from 1
-                          for entry in settings-list
-                          nconc (list (car entry) i "\n"))))))
-      (crdt--call-with-ephemeral-advice
-       'forms--help 'ignore
-       (lambda ()
-         (crdt--call-with-ephemeral-advice
-          'find-file-noselect
-          (lambda (orig-func file)
-            (if (eq file t)
-                (with-current-buffer data-buffer
-                  (cl-loop for entry in settings-list
-                        do (insert (cadr entry))
-                        do (insert "\t"))
-                  (backward-delete-char 1)
-                  (current-buffer))
-              (funcall orig-func file)))
-          #'forms-mode)))
+          (data-buffer (generate-new-buffer (concat " " buffer-name))))
       (unwind-protect
            (progn
-             (use-local-map crdt-read-settings-map)
-             (display-buffer (current-buffer)
-                             '(display-buffer-below-selected
-                               (window-height . fit-window-to-buffer)))
-             (select-window (get-buffer-window (current-buffer)))
-             (recursive-edit)
-             (forms--update)
-             (cl-mapcar (lambda (entry data)
-                          (funcall (or (caddr entry) #'identity) data))
-                        settings-list forms--the-record-list))
-        (forms-exit-no-save)
-        (unless (< (length (window-list)) 2)
-          (delete-window (get-buffer-window (current-buffer))))))))
+             (let ((standard-output (current-buffer)))
+               (prin1
+                `(setq forms-file t
+                       forms-number-of-fields ,(length settings-list)
+                       forms-format-list
+                       '(,(let ((overriding-local-map crdt-read-settings-map))
+                            (substitute-command-keys
+                             (concat "\\[forms-next-field]:Next Field, \\[forms-prev-field]:Prev Field\n"
+                                     "\\[exit-recursive-edit]:OK, \\[abort-recursive-edit]:Cancel\n")))
+                         ,@(cl-loop for i from 1
+                                 for entry in settings-list
+                                 nconc (list (car entry) i "\n"))))))
+             (crdt--call-with-ephemeral-advice
+              'forms--help 'ignore
+              (lambda ()
+                (crdt--call-with-ephemeral-advice
+                 'find-file-noselect
+                 (lambda (orig-func file)
+                   (if (eq file t)
+                       (with-current-buffer data-buffer
+                         (cl-loop for entry in settings-list
+                               do (insert (cadr entry))
+                               do (insert "\t"))
+                         (backward-delete-char 1)
+                         (current-buffer))
+                     (funcall orig-func file)))
+                 #'forms-mode)))
+             (unwind-protect
+                  (progn
+                    (use-local-map crdt-read-settings-map)
+                    (display-buffer (current-buffer)
+                                    '(display-buffer-below-selected
+                                      (window-height . fit-window-to-buffer)))
+                    (select-window (get-buffer-window (current-buffer)))
+                    (recursive-edit)
+                    (forms--update)
+                    (cl-mapcar (lambda (entry data)
+                                 (funcall (or (caddr entry) #'identity) data))
+                               settings-list forms--the-record-list))
+               (forms-exit-no-save)
+               (unless (< (length (window-list)) 2)
+                 (delete-window (get-buffer-window (current-buffer))))))
+        (kill-buffer data-buffer)))))
 
 (defun crdt--share-buffer (buffer session)
   "Add BUFFER to CRDT SESSION."
