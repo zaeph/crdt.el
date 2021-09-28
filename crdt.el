@@ -1908,6 +1908,7 @@ Current user means the user corresponding to CRDT--PROCESS."
   (let ((map (copy-keymap forms-mode-map)))
     (define-key map (kbd "<tab>") #'forms-next-field)
     (define-key map (kbd "<backtab>") #'forms-prev-field)
+    (define-key map (kbd "DEL") nil) ;; without this, DEL somehow get mapped to forms-prev-record
     (define-key map (kbd "RET") #'exit-recursive-edit)
     (define-key map (kbd "C-g") #'abort-recursive-edit)
     (define-key map [remap forms-next-record] 'ignore)
