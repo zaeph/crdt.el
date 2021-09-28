@@ -76,6 +76,13 @@
   "Start tuntox proxy for CRDT servers."
   :type '(choice boolean (const confirm)))
 
+(defcustom crdt-default-session-command-functions
+  '((crdt-get-write-access)
+    crdt-xref-command-function)
+  "A list that describes default policies for public session-scoped commands.
+See `crdt-new-session'.'"
+  :type '(list (or function (list function))))
+
 ;;; Pseudo cursor/region utils
 
 (defvar crdt-cursor-region-colors
@@ -290,7 +297,7 @@ Must be used inside CRDT--WITH-INSERTION-INFORMATION."
 (cl-defstruct (crdt--session (:constructor crdt--make-session))
   local-id                              ; Local user-id
   local-clock                           ; Local logical clock
-  contact-table ; A hash table that maps USER-ID to CRDT--CONTACT-METADATAs
+  (contact-table (make-hash-table)) ; A hash table that maps USER-ID to CRDT--CONTACT-METADATAs
   local-name
   name
   focused-buffer-name
@@ -298,10 +305,12 @@ Must be used inside CRDT--WITH-INSERTION-INFORMATION."
   buffer-menu-buffer
   network-process
   network-clients
-  next-client-id
-  buffer-table                    ; maps buffer network name to buffer
+  next-user-id
+  (buffer-table (make-hash-table :test 'equal)); maps buffer network name to buffer
   follow-user-id
-  user-command-functions)
+  command-functions
+  (fcap-in-table (make-hash-table :test 'eq))
+  (fcap-out-table (make-hash-table :test 'eq)))
 
 (defvar crdt--inhibit-update nil "When set, don't call CRDT--LOCAL-* on change.
 This is useful for functions that apply remote change to local buffer,
@@ -362,14 +371,20 @@ adding/removing actively tracked overlays.")
 (defvar-local crdt--enabled-text-properties nil
   "A list of text properties that are tracked and synchronized.")
 
-(defvar-local crdt-user-command-functions nil
+(defvar-local crdt-buffer-command-functions nil
   "A list that describes policies for public buffer-local commands.
 Each element should be one of
-- a symbol, which should name a command.
-  The command is be made accessible to every user.
 - a function, which should return a list of commands when
   called with a single argument USER-ID.
-  The returned list of commands is made accessible to the user with USER-ID.")
+  The returned list of commands is made accessible to the user with USER-ID.
+- a list of commands.
+  These commands are made accessible to every user.")
+
+(defvar-local crdt-buffer-fcap-in-table nil
+  "A hash table that maps local command symbol to a nonce.")
+
+(defvar-local crdt-buffer-fcap-out-table nil
+  "A hash table that maps remote command symbol to a function.")
 
 ;;; Global variables
 
@@ -378,8 +393,8 @@ Each element should be one of
 
 (defvar crdt--process nil
   "Temporarily bound to the current network process when processing messages inside CRDT--NETWORK-FILTER.")
-(defvar crdt--user-id nil
-  "Temporarily bound to the User ID who requests the current remote command call.")
+(defsubst crdt--client-id ()
+  (process-get crdt--process 'client-id))
 
 ;;; crdt-mode
 
@@ -433,10 +448,18 @@ Also set CRDT--PSEUDO-CURSOR-TABLE to NIL."
           (setq crdt--pseudo-cursor-table (make-hash-table)))
         (unless crdt--overlay-table
           (setq crdt--overlay-table (make-hash-table :test 'equal)))
+        (unless crdt-buffer-fcap-in-table
+          (setq crdt-buffer-fcap-in-table (make-hash-table)))
+        (unless crdt-buffer-fcap-out-table
+          (setq crdt-buffer-fcap-out-table (make-hash-table)))
+        (setq crdt--site-id-list (list 0 crdt--max-value))
         (crdt--install-hooks))
     (crdt--uninstall-hooks)
     (crdt--clear-pseudo-cursor-table)
-    (setq crdt--overlay-table nil)))
+    (setq crdt--overlay-table nil
+          crdt-buffer-fcap-in-table nil
+          crdt-buffer-fcap-out-table nil
+          crdt--site-id-list nil)))
 
 (defun crdt--clone-buffer-hook ()
   (crdt-mode -1))
@@ -528,6 +551,19 @@ If we are the server, ERR is the error we shall report to client."
 
 ;;; Shared buffer utils
 
+(defun crdt--call-with-buffer-name (name function)
+  "Find CRDT shared buffer associated with NAME and call FUNCTION in it.
+See `crdt--with-buffer-name'."
+  (let (crdt-buffer)
+    (setq crdt-buffer (gethash name (crdt--session-buffer-table crdt--session)))
+    (when (and crdt-buffer (buffer-live-p crdt-buffer))
+      (with-current-buffer crdt-buffer
+        (save-restriction
+          (widen)
+          (condition-case err
+              (funcall function)
+            (crdt-sync-error (crdt--recover err))))))))
+
 (defmacro crdt--with-buffer-name (name &rest body)
   "Find CRDT shared buffer associated with NAME and evaluate BODY in it.
 Any narrowing is temporarily disabled during evaluation of BODY.
@@ -535,15 +571,7 @@ Also, try to recover from synchronization error if any error happens in BODY.
 Must be called when CURRENT-BUFFER is a CRDT status buffer.
 If such buffer doesn't exist yet, do nothing."
   (declare (indent 1) (debug (sexp def-body)))
-  `(let (crdt-buffer)
-     (setq crdt-buffer (gethash ,name (crdt--session-buffer-table crdt--session)))
-     (when (and crdt-buffer (buffer-live-p crdt-buffer))
-       (with-current-buffer crdt-buffer
-         (save-restriction
-           (widen)
-           (condition-case err
-               ,(cons 'progn body)
-             (crdt-sync-error (crdt--recover err))))))))
+  `(crdt--call-with-buffer-name ,name (lambda () ,@body)))
 
 (defmacro crdt--with-buffer-name-pull (name &rest body)
   "Find CRDT shared buffer associated with NAME and evaluate BODY in it.
@@ -1112,7 +1140,7 @@ The deletion happens between BEG and END, and have LENGTH."
     (crdt--with-insertion-information ((length crdt--changed-string) outer-end crdt--changed-string nil 0 nil)
       (crdt--split-maybe))
     ;; (crdt--verify-buffer)
-    `(delete ,crdt--buffer-network-name
+    `(delete ,crdt--buffer-network-name ,(crdt--session-local-id crdt--session)
              ,beg ,@ (crdt--dump-ids 0 (length crdt--changed-string) crdt--changed-string t))))
 
 (defun crdt--remote-delete (position-hint id-items)
@@ -1144,12 +1172,20 @@ Start the search for those ID-ITEMs around POSITION-HINT."
 
 (defun crdt--before-change (beg end)
   "Before change hook used by CRDT-MODE.
-It saves the content to be changed (between BEG and END) into CRDT--CHANGED-STRING."
+Save the content to be changed (between BEG and END) into CRDT--CHANGED-STRING.
+Request a Site ID if we don't have it yet."
   (unless crdt--inhibit-update
     (setq crdt--changed-string (crdt--buffer-substring beg end))
     (crdt--text-property-assimilate nil beg end 0
                                     'crdt-id crdt--changed-string)
-    (setq crdt--changed-start beg)))
+    (setq crdt--changed-start beg)
+    (unless crdt--site-id
+      (condition-case nil
+          (setq crdt--site-id (crdt-remote-call 'crdt-get-write-access))
+        (crdt-access-denied
+         (read-only-mode)
+         (warn "Write access revoked in %s" crdt--buffer-network-name)
+         (signal 'quit nil))))))
 
 (defsubst crdt--crdt-id-assimilate (template beg &optional object)
   "Make the CRDT-ID property after BEG in OBJECT the same as TEMPLATE.
@@ -1273,6 +1309,7 @@ Always return a message otherwise."
 Check if focused buffer and cursor/mark position are changed.
 Send message to other peers about any changes."
   (crdt--with-should-not-error crdt--post-command
+    (add-to-list 'before-change-functions 'crdt--before-change)
     (unless (eq crdt--buffer-network-name (crdt--session-focused-buffer-name crdt--session))
       (crdt--broadcast-maybe
        (crdt--format-message `(focus ,(crdt--session-local-id crdt--session) ,crdt--buffer-network-name)))
@@ -1479,7 +1516,7 @@ CRDT--PROCESS should be bound to the network process for the client connection."
                                           (crdt--format-message
                                            `(cursor ,crdt--buffer-network-name ,user-id
                                                     ,point ,(crdt--get-id point)
-                                                    ,mark ,(crdt--get-id mark)))))))
+                                                    ,mark ,(when mark (crdt--get-id mark))))))))
                crdt--pseudo-cursor-table)
       (process-send-string crdt--process (crdt--format-message (crdt--local-cursor nil)))
 
@@ -1503,7 +1540,17 @@ CRDT--PROCESS should be bound to the network process for the client connection."
                crdt--overlay-table)
 
       (crdt--send-process-mark-maybe nil)
-      (crdt--send-variables-maybe nil))))
+      (crdt--send-variables-maybe nil)
+
+      ;; send fcaps
+      (dolist (command (crdt--compute-user-commands crdt-buffer-command-functions (crdt--client-id)))
+        (let ((nonce (or (gethash command crdt-buffer-fcap-in-table)
+                         (puthash command (crdt--generate-nonce) crdt-buffer-fcap-in-table))))
+          (process-send-string crdt--process
+                               (crdt--format-message
+                                `(fcap ,crdt--buffer-network-name ,command ,nonce
+                                       ,(get command 'crdt-out-states)
+                                       ,(get command 'crdt-in-states)))))))))
 
 (defun crdt--greet-client ()
   "Send initial information when a client connects.
@@ -1514,14 +1561,12 @@ CRDT--PROCESS should be bound to The network process for the client connection."
     (cl-pushnew crdt--process (crdt--session-network-clients crdt--session))
     (let ((client-id (process-get crdt--process 'client-id)))
       (unless client-id
-        (unless (< (crdt--session-next-client-id crdt--session) crdt--max-value)
-          (error "Used up client IDs.  Need to implement allocation algorithm"))
-        (process-put crdt--process 'client-id (crdt--session-next-client-id crdt--session))
-        (setq client-id (crdt--session-next-client-id crdt--session))
+        (process-put crdt--process 'client-id (crdt--session-next-user-id crdt--session))
+        (setq client-id (crdt--session-next-user-id crdt--session))
         (process-send-string crdt--process (crdt--format-message
                                       `(login ,client-id
                                               ,(crdt--session-name crdt--session))))
-        (cl-incf (crdt--session-next-client-id crdt--session)))
+        (cl-incf (crdt--session-next-user-id crdt--session)))
       (process-send-string crdt--process (crdt--format-message
                                     (cons 'add (hash-table-keys (crdt--session-buffer-table crdt--session)))))
       ;; synchronize contact
@@ -1546,20 +1591,30 @@ CRDT--PROCESS should be bound to The network process for the client connection."
       (let ((contact-message `(contact ,client-id ,(process-get crdt--process 'client-name)
                                        ,(process-contact crdt--process :host)
                                        ,(process-contact crdt--process :service))))
-        (crdt-process-message-1 contact-message)))))
+        (crdt-process-message-1 contact-message))
+      ;; send fcaps
+      (dolist (command (crdt--compute-user-commands (crdt--session-command-functions crdt--session) client-id))
+        (let ((nonce (or (gethash command (crdt--session-fcap-in-table crdt--session))
+                         (puthash command (crdt--generate-nonce)
+                                  (crdt--session-fcap-in-table crdt--session)))))
+          (process-send-string crdt--process
+                               (crdt--format-message
+                                `(fcap nil ,command ,nonce
+                                       ,(get command 'crdt-out-states)
+                                       ,(get command 'crdt-in-states)))))))))
 
 (define-crdt-message-handler insert (buffer-name user-id crdt-id position-hint content)
   (crdt--with-buffer-name buffer-name
     (crdt--with-recover
         (crdt--remote-insert crdt-id user-id position-hint content)))
-  (crdt--broadcast-maybe crdt--message-string (process-get crdt--process 'client-id)))
+  (crdt--broadcast-maybe crdt--message-string (crdt--client-id)))
 
-(define-crdt-message-handler delete (buffer-name position-hint . id-pairs)
+(define-crdt-message-handler delete (buffer-name _user-id position-hint . id-pairs)
   (mapc (lambda (p) (rplaca (cdr p) (cadr p))) id-pairs)
   (crdt--with-buffer-name buffer-name
     (crdt--with-recover
         (crdt--remote-delete position-hint id-pairs)))
-  (crdt--broadcast-maybe crdt--message-string (process-get crdt--process 'client-id)))
+  (crdt--broadcast-maybe crdt--message-string (crdt--client-id)))
 
 (define-crdt-message-handler cursor
     (buffer-name user-id point-position-hint point-crdt-id mark-position-hint mark-crdt-id)
@@ -1567,7 +1622,7 @@ CRDT--PROCESS should be bound to The network process for the client connection."
     (crdt--with-recover
         (crdt--remote-cursor user-id point-position-hint point-crdt-id
                              mark-position-hint mark-crdt-id)))
-  (crdt--broadcast-maybe crdt--message-string (process-get crdt--process 'client-id)))
+  (crdt--broadcast-maybe crdt--message-string (crdt--client-id)))
 
 (define-crdt-message-handler get (buffer-name)
   (let ((buffer (gethash buffer-name (crdt--session-buffer-table crdt--session))))
@@ -1578,8 +1633,8 @@ CRDT--PROCESS should be bound to The network process for the client connection."
 (define-crdt-message-handler sync (buffer-name . ids)
   (unless (crdt--server-p)             ; server shouldn't receive this
     (crdt--with-buffer-name buffer-name
-      (read-only-mode -1)
-      (let ((crdt--inhibit-update t))
+      (let ((crdt--inhibit-update t)
+            (inhibit-read-only t))
         (unless crdt--buffer-sync-callback
           ;; try to get to the same position after sync,
           ;; if crdt--buffer-sync-callback is not set yet
@@ -1603,7 +1658,9 @@ CRDT--PROCESS should be bound to The network process for the client connection."
           (unless (eq major-mode mode)
             (funcall mode)              ; trust your server...
             (crdt-mode))
-        (message "Server uses %s, but not available locally." mode))
+        (warn "Server uses %s, but not available locally." mode))
+      (when (crdt-get-fcap 'crdt-get-write-access)
+        (read-only-mode -1))
       (when crdt--buffer-sync-callback
         (funcall crdt--buffer-sync-callback)
         (setq crdt--buffer-sync-callback nil)))))
@@ -1649,9 +1706,7 @@ CRDT--PROCESS should be bound to The network process for the client connection."
         (warn "Server stopped sharing %s."
               (mapconcat #'identity buffer-names ", "))))
    (let ((crdt--session saved-session))
-     (crdt--broadcast-maybe crdt--message-string
-                            (when crdt--process
-                              (process-get crdt--process 'client-id)))
+     (crdt--broadcast-maybe crdt--message-string (when crdt--process (crdt--client-id)))
      (crdt--refresh-buffers-maybe))))
 
 (define-crdt-message-handler login (id session-name)
@@ -1690,7 +1745,7 @@ CRDT--PROCESS should be bound to The network process for the client connection."
         (crdt-stop-follow))
       (remhash user-id (crdt--session-contact-table crdt--session))))
   (crdt--refresh-users-maybe)
-  (crdt--broadcast-maybe crdt--message-string (process-get crdt--process 'client-id)))
+  (crdt--broadcast-maybe crdt--message-string (crdt--client-id)))
 
 (define-crdt-message-handler focus (user-id buffer-name)
   (let ((existing-item (gethash user-id (crdt--session-contact-table crdt--session))))
@@ -1704,7 +1759,7 @@ CRDT--PROCESS should be bound to The network process for the client connection."
       (let ((ov-pair (gethash user-id crdt--pseudo-cursor-table)))
         (when ov-pair (goto-char (overlay-start (car ov-pair)))))))
   (crdt--refresh-users-maybe)
-  (crdt--broadcast-maybe crdt--message-string (process-get crdt--process 'client-id)))
+  (crdt--broadcast-maybe crdt--message-string (crdt--client-id)))
 
 (defun crdt--network-filter (process string)
   "Network filter function for CRDT network processes.
@@ -1788,7 +1843,26 @@ Handle received STRING from PROCESS."
 
 ;;; Capabilities
 
-(defun crdt-request-site-id ()
+(define-error 'crdt-access-denied "CRDT access denied")
+
+(defun crdt--generate-nonce ()
+  (with-temp-buffer
+    (toggle-enable-multibyte-characters 0)
+    (let ((err (call-process-shell-command "head -c 8 /dev/urandom" nil t)))
+      (unless (= err 0)
+        (error "Failed to read /dev/urandom (code %s)" err)))
+    (buffer-string)))
+
+(defun crdt--compute-user-commands (command-function user-id)
+  (cl-loop for f in command-function
+        if (functionp f)
+        append (funcall f user-id)
+        else
+        append f))
+
+(defun crdt-get-write-access ()
+  "Allocate a Site ID for current user to access current buffer.
+Current user means the user corresponding to CRDT--PROCESS."
   (let (new-site-id)
     (cl-loop
           for i in crdt--site-id-list
@@ -1806,7 +1880,7 @@ Handle received STRING from PROCESS."
         (rplacd cons nil)
         (setq new-site-id victim-id)))
     (push new-site-id crdt--site-id-use-list)
-    (puthash crdt--user-id new-site-id crdt--site-id-table)
+    (puthash (crdt--client-id) new-site-id crdt--site-id-table)
     new-site-id))
 
 ;;; UI commands
@@ -1899,16 +1973,14 @@ Handle received STRING from PROCESS."
         (setq crdt--session session)
         (puthash (buffer-name buffer) buffer (crdt--session-buffer-table crdt--session))
         (setq crdt--buffer-network-name (buffer-name buffer)
-              crdt--site-id 0 crdt--site-id-table (make-hash-table)
-              crdt--site-id-free-list (cl-loop for i from 1 below crdt--max-value collect i))
+              crdt--site-id 0 crdt--site-id-table (make-hash-table))
         (crdt-mode)
         (save-excursion
           (save-restriction
             (widen)
             (let ((crdt--inhibit-update t))
               (with-silent-modifications
-                (crdt--local-insert (point-min) (point-max))))
-            (run-hooks (crdt--session-add-buffer-hook crdt--session))))
+                (crdt--local-insert (point-min) (point-max))))))
         (crdt--refresh-buffers-maybe)
         (crdt--refresh-sessions-maybe))
     (error "Only server can add new buffer")))
@@ -1926,12 +1998,9 @@ Handle received STRING from PROCESS."
        string default)))
 
 ;;;###autoload
-(defun crdt-share-buffer (session-name &optional port)
+(defun crdt-share-buffer (session-name)
   "Share the current buffer in the CRDT session with name SESSION-NAME.
-Create a new one if such a CRDT session doesn't exist.  When PORT
-is non-NIL use when creating a new session, otherwise prompt
-from minibuffer.  If SESSION-NAME is empty, use the buffer name
-of the current buffer."
+Create a new one if such a CRDT session doesn't exist."
   (interactive
    (progn
      (when (and crdt-mode crdt--session)
@@ -1955,10 +2024,13 @@ of the current buffer."
          (apply #'crdt-new-session
                 (crdt--read-settings
                  (format "*Settings for %s*" session-name)
-                 `(("Port: " (number-to-string ,port) ,(crdt--settings-make-ensure-type 'numberp))
+                 `(("Port: " "6530" ,(crdt--settings-make-ensure-type 'numberp))
                    ("Session Name: " ,session-name ,(crdt--settings-make-ensure-nonempty session-name))
                    ("Password: " "")
-                   ("Display Name: " ,crdt-default-name))))))))
+                   ("Display Name: " ,crdt-default-name)
+                   ("Command Functions: "
+                    ,(prin1-to-string crdt-default-session-command-functions)
+                    ,(crdt--settings-make-ensure-type 'listp)))))))))
 
 (cl-defun crdt-stop-share-buffer (&optional (session crdt--session)
                                  (network-name crdt--buffer-network-name))
@@ -1974,18 +2046,18 @@ of the current buffer."
     (message "Not a CRDT shared buffer.")))
 
 (defun crdt-new-session
-    (port session-name password display-name user-command-functions)
+    (port session-name password display-name command-functions)
   "Start a new CRDT session on PORT with SESSION-NAME.
 Setup up the server with PASSWORD and assign this Emacs DISPLAY-NAME.
-USER-COMMAND-FUNCTIONS is a list that describes policies
+COMMAND-FUNCTIONS is a list that describes policies
 for public session-scoped commands.
 Each element should be one of
-- a symbol, which should name a command.
-  The command is be made accessible to every user, in every buffer.
 - a function, which should return a list of commands when
-  called with two arguments USER-ID and BUFFER.
+  called with a single argument USER-ID..
   The returned list of commands is made accessible
-  to the user with USER-ID in BUFFER."
+  to the user with USER-ID in every buffer.
+- a list of commands.
+  These commands are made accessible to every user, in every buffer."
   (let* ((network-process (make-network-process
                            :name "CRDT Server"
                            :server t
@@ -1996,13 +2068,11 @@ Each element should be one of
          (new-session
           (crdt--make-session :local-id 0
                               :local-clock 0
-                              :next-client-id 1
+                              :next-user-id 1
                               :local-name display-name
-                              :contact-table (make-hash-table :test 'equal)
-                              :buffer-table (make-hash-table :test 'equal)
                               :name session-name
                               :network-process network-process
-                              :user-command-functions user-command-functions))
+                              :command-functions command-functions))
          (tuntox-p (or (eq crdt-use-tuntox t)
                        (and (eq crdt-use-tuntox 'confirm)
                             (yes-or-no-p "Start a tuntox proxy for this session? ")))))
@@ -2139,8 +2209,6 @@ Join with DISPLAY-NAME."
                             (new-session
                              (crdt--make-session :local-clock 0
                                                  :local-name display-name
-                                                 :contact-table (make-hash-table :test 'equal)
-                                                 :buffer-table (make-hash-table :test 'equal)
                                                  :name name-placeholder
                                                  :network-process network-process)))
                       (process-put network-process 'crdt-session new-session)
@@ -2257,7 +2325,7 @@ Join with DISPLAY-NAME."
           (let ((crdt--inhibit-overlay-advices t)
                 (crdt--modifying-overlay-metadata t))
             (overlay-put new-overlay 'crdt-meta meta)))))
-  (crdt--broadcast-maybe crdt--message-string (process-get crdt--process 'client-id)))
+  (crdt--broadcast-maybe crdt--message-string (crdt--client-id)))
 
 (defun crdt--move-overlay-advice (orig-fun ov beg end &rest args)
   (when crdt-mode
@@ -2315,7 +2383,7 @@ Join with DISPLAY-NAME."
             (remhash key crdt--overlay-table)
             (let ((crdt--inhibit-overlay-advices t))
               (delete-overlay ov))))))
-  (crdt--broadcast-maybe crdt--message-string (process-get crdt--process 'client-id)))
+  (crdt--broadcast-maybe crdt--message-string (crdt--client-id)))
 
 (defun crdt--overlay-put-advice (orig-fun ov prop value)
   (unless (and (eq prop 'crdt-meta)
@@ -2397,33 +2465,57 @@ Join with DISPLAY-NAME."
                 (push (crdt--readable-decode (cadr entry)) vals))))
     (cons vars vals)))
 
-(defvar crdt--remote-call-spawn-site nil
-  "The site where current remote call (if any) is orignally called.")
+(defvar crdt--remote-call-spawn-user-id nil
+  "The User ID where current remote call (if any) is orignally called.")
+
+(define-crdt-message-handler fcap
+    (buffer-name command-symbol nonce in-states _out-states)
+  (cl-flet* ((body ()
+                   (puthash command-symbol
+                            (lambda (&rest args)
+                              (crdt--remote-call (crdt--session-local-id crdt--session)
+                                                 command-symbol nonce in-states args))
+                            (if buffer-name crdt-buffer-fcap-out-table
+                              (crdt--session-fcap-out-table crdt--session)))
+                   (cl-case command-symbol
+                     ((crdt-get-write-access)
+                      (if buffer-name
+                          (read-only-mode -1)
+                        (dolist (buffer (hash-table-values (crdt--session-buffer-table crdt--session)))
+                          (when buffer
+                            (with-current-buffer buffer (read-only-mode -1)))))))))
+    (if buffer-name (crdt--call-with-buffer-name buffer-name #'body) (funcall #'body))))
 
 (define-crdt-message-handler command
-    (buffer-name spawn-user-id user-id logical-clock
-                 state-list command-symbol &rest args)
-  (crdt--with-buffer-name buffer-name
-    (save-mark-and-excursion
-      (save-window-excursion
-        (let ((bindings (crdt--apply-state-list state-list)))
-          (cl-progv (car bindings) (cdr bindings)
-            (let* ((crdt--inhibit-update nil)
-                   (crdt--remote-call-spawn-site spawn-user-id)
-                   (session crdt--session)
-                   (return-message
-                    (if (get command-symbol 'crdt-allow-remote-call)
-                        (condition-case err
-                            (list t (apply command-symbol (mapcar #'crdt--readable-decode args)))
-                          (error (list nil (car err) (crdt--readable-encode (cdr err)))))
-                      (list nil 'crdt-access-denied))))
-              (setq crdt--session session) ;; workaround, somehow CRDT--SESSION becomes NIL after some command
-              (let ((msg (crdt--format-message
-                          `(return ,user-id ,logical-clock
-                                   ,(crdt--assemble-state-list (get command-symbol 'crdt-command-out-states))
-                                   ,@return-message))))
-                (crdt--log-send-network-traffic msg)
-                (process-send-string crdt--process msg)))))))))
+    (buffer-name user-id logical-clock spawn-user-id
+                 state-list nonce command-symbol &rest args)
+  (cl-flet*
+      ((check ()
+              (or (equal nonce
+                         (gethash command-symbol (crdt--session-fcap-in-table crdt--session)))
+                  (and buffer-name
+                       (equal nonce
+                              (gethash command-symbol crdt-buffer-fcap-in-table)))))
+       (body ()
+             (let ((bindings (crdt--apply-state-list state-list)))
+               (cl-progv (car bindings) (cdr bindings)
+                 (let* ((crdt--inhibit-update nil)
+                        (crdt--remote-call-spawn-user-id spawn-user-id)
+                        (return-message
+                         (if (check)
+                             (save-mark-and-excursion
+                               (save-window-excursion
+                                 (condition-case err
+                                     (list t (apply command-symbol (mapcar #'crdt--readable-decode args)))
+                                   (error (list nil (car err) (crdt--readable-encode (cdr err)))))))
+                           (list nil 'crdt-access-denied))))
+                   (let ((msg (crdt--format-message
+                               `(return ,user-id ,logical-clock
+                                        ,(crdt--assemble-state-list (get command-symbol 'crdt-command-out-states))
+                                        ,@return-message))))
+                     (crdt--log-send-network-traffic msg)
+                     (process-send-string crdt--process msg)))))))
+    (if buffer-name (crdt--call-with-buffer-name buffer-name #'body) (funcall #'body))))
 
 (defvar crdt--return-message-table (make-hash-table))
 
@@ -2432,25 +2524,23 @@ Join with DISPLAY-NAME."
     (puthash logical-clock (cl-list* state-list success-p (crdt--readable-decode return-values))
              crdt--return-message-table)))
 
-(defun crdt--make-remote-call (spawn-user-id function-symbol in-states args)
+(defun crdt--remote-call (spawn-user-id function-symbol nonce in-states args)
   "Send remote call request (a command type message) for FUNCTION-SYMBOL.
-SPAWN-USER-ID is the site where
-the series (if any) of remote calls originally started.
-Assemble state list for items in IN-STATES.
-Request for calling FUNCTION-SYMBOL with ARGS."
+SPAWN-USER-ID is the site where the series (if any) of remote calls originally started.
+NONCE should be acquired from some fcap message for fcap verification.
+Assemble state list for items in IN-STATES. Request for calling FUNCTION-SYMBOL with ARGS."
   (let* ((user-id (crdt--session-local-id crdt--session))
          (logical-clock (crdt--session-local-clock crdt--session))
          (msg (crdt--format-message
-               `(command ,crdt--buffer-network-name ,spawn-user-id
-                         ,user-id ,logical-clock
-                         ,(crdt--assemble-state-list in-states)
+               `(command ,crdt--buffer-network-name ,user-id
+                         ,logical-clock  ,spawn-user-id
+                         ,(crdt--assemble-state-list in-states) ,nonce
                          ,function-symbol ,@(mapcar #'crdt--readable-encode args)))))
     (crdt--log-send-network-traffic msg)
     (process-send-string (crdt--session-network-process crdt--session) msg)
     (cl-incf (crdt--session-local-clock crdt--session))
     (while (not (gethash logical-clock crdt--return-message-table))
-      (sleep-for 0.1)
-      (thread-yield))
+      (accept-process-output (crdt--session-network-process crdt--session)))
     (let ((return-message (gethash logical-clock crdt--return-message-table)))
       (remhash logical-clock crdt--return-message-table)
       (cl-destructuring-bind (state-list success-p &rest return-values) return-message
@@ -2459,72 +2549,29 @@ Request for calling FUNCTION-SYMBOL with ARGS."
             (car return-values)
           (apply #'signal return-values))))))
 
-(defun crdt--make-remote-command-advice (function-symbol in-states)
-  (lambda (orig-fun &rest args)
-    (if (and crdt--session (not (crdt--server-p)))
-        (crdt--make-remote-call (crdt--session-local-id crdt--session)
-                                function-symbol in-states args)
-      (apply orig-fun args))))
+(defsubst crdt-get-fcap (command-symbol)
+  "Find buffer or session fcap with name COMMAND-SYMBOL."
+  (or (gethash command-symbol crdt-buffer-fcap-out-table)
+      (gethash command-symbol (crdt--session-fcap-out-table crdt--session))))
 
-(defun crdt-register-remote-command (command-symbol &optional in-states out-states)
-  "Register COMMAND-SYMBOL as a remote command.
-Allow remote calls to COMMAND-SYMBOL.
-Delegate calls to COMMAND-SYMBOL at client side to the server.
-Assume that COMMAND-SYMBOL, when invoked,
-make use of no more states other than those in IN-STATES.
-After executing the command on the server,
-OUT-STATES are sent back to the client."
-  (put command-symbol 'crdt-allow-remote-call t)
-  (put command-symbol 'crdt-command-out-states out-states)
-  (advice-add command-symbol :around (crdt--make-remote-command-advice command-symbol in-states)
-              '((name . crdt-remote-command-advice))))
-
-(defun crdt-unregister-remote-command (command-symbol)
-  "Unregister COMMAND-SYMBOL as a remote command.
-Stop allowing remote calls to COMMAND-SYMBOL."
-  (cl-remprop command-symbol 'crdt-allow-remote-call)
-  (advice-remove command-symbol 'crdt-remote-command-advice))
+(defun crdt-remote-call (command-symbol &rest args)
+  "Remote call COMMAND-SYMBOL with ARGS.
+Find and use buffer or session fcap with name COMMAND-SYMBOL."
+  (let ((fcap (crdt-get-fcap command-symbol)))
+    (if fcap (apply fcap args)
+      (signal 'crdt-access-denied command-symbol))))
 
 (defun crdt-register-remote-commands (command-entries)
   "Register a list of remote commands according to COMMAND-ENTRIES.
 Each item in COMMAND-ENTRIES should have the form (COMMAND-SYMBOL &optional IN-STATES OUT-STATES)."
   (dolist (entry command-entries)
-    (apply #'crdt-register-remote-command entry)))
+    (cl-destructuring-bind (command-symbol &optional in-states out-states) entry
+      (put command-symbol 'crdt-in-states in-states)
+      (put command-symbol 'crdt-out-states out-states))))
 
-(defun crdt-unregister-remote-commands (command-entries)
-  "Unregister a list of remote commands according to COMMAND-ENTRIES.
-Required form of COMMAND-ENTRIES is the same as that of CRDT-REGISTER-REMOTE-COMMANDS."
-  (dolist (entry command-entries)
-    (crdt-unregister-remote-command (car entry))))
-
-(defun crdt--make-remote-interaction-advice (function-symbol)
-  (lambda (orig-fun &rest args)
-    (if (and crdt--process
-             (not (eq crdt--remote-call-spawn-site (crdt--session-local-id crdt--session))))
-        ;; Is the above condition correct?
-        ;; We must make sure we don't bind crdt--process AND call interaction command
-        ;; in any circumstances except inside a remote command call
-        (crdt--make-remote-call crdt--remote-call-spawn-site function-symbol nil args)
-      (apply orig-fun args))))
-
-(defun crdt-register-interaction-function (function-symbol &rest states)
-  "Register FUNCTION-SYMBOL as a remote interaction function.
-Allow remote calls to FUNCTION-SYMBOL.
-Delegate calls to FUNCTION-SYMBOL inside some remote command call
-back to the site where the remote command is originally invoked.
-Assume that COMMAND-SYMBOL, when invoked,
-make use of no more states other than those in STATES."
-  (put function-symbol 'crdt-allow-remote-call t)
-  (advice-add function-symbol :around (apply #'crdt--make-remote-interaction-advice function-symbol states)
-              '((name . crdt-remote-interaction-advice))))
-
-(defun crdt-unregister-interaction-function (function-symbol)
-  "Unregister FUNCTION-SYMBOL as a remote interaction function.
-Stop allowing remote calls to FUNCTION-SYMBOL."
-  (cl-remprop function-symbol 'crdt-allow-remote-call)
-  (advice-remove function-symbol 'crdt-remote-interaction-advice))
-
-(crdt-register-interaction-function 'read-from-minibuffer)
+(defun crdt-make-publish-command-hook (command-entries)
+  "Return a function that publish commands in COMMAND-ENTRIES for current buffer."
+  (push (mapcar #'car command-entries) crdt-buffer-command-functions))
 
 ;;; Buffer local variables
 
@@ -2727,8 +2774,7 @@ The result DIFF can be used in (CRDT--NAPPLY-DIFF OLD DIFF) to reproduce NEW."
             (if buffer-process
                 (progn (set-marker (process-mark buffer-process) (point))
                        (setq crdt--last-process-mark-id crdt-id)
-                       (crdt--broadcast-maybe crdt--message-string
-                                              (process-get crdt--process 'client-id)))
+                       (crdt--broadcast-maybe crdt--message-string (crdt--client-id)))
               (unless (crdt--server-p)
                 (setq crdt--buffer-pseudo-process
                       (crdt--make-pseudo-process :buffer (current-buffer) :mark (point-marker)))
@@ -2848,25 +2894,27 @@ Use CRDT--UNINSTALL-PROCESS-ADVICES to disable those advices for the rescue."
       do (advice-add command :around #'crdt--org-overlay-advice))
 
 ;;;; xscheme
-(crdt-register-remote-commands
- '((xscheme-send-region (region))
-   (xscheme-send-definition (point))
-   (xscheme-send-previous-expression (point))
-   (xscheme-send-next-expression (point))
-   (xscheme-send-current-line (point))
-   (xscheme-send-buffer)
-   (xscheme-send-char)
-   (xscheme-delete-output)
-   (xscheme-send-breakpoint-interrupt)
-   (xscheme-send-proceed)
-   (xscheme-send-control-g-interrupt)
-   (xscheme-send-control-u-interrupt)
-   (xscheme-send-control-x-interrupt)
-   (scheme-debugger-self-insert (last-command-event))))
+(defvar crdt-xscheme-commands
+  '((xscheme-send-region (region))
+    (xscheme-send-definition (point))
+    (xscheme-send-previous-expression (point))
+    (xscheme-send-next-expression (point))
+    (xscheme-send-current-line (point))
+    (xscheme-send-buffer)
+    (xscheme-send-char)
+    (xscheme-delete-output)
+    (xscheme-send-breakpoint-interrupt)
+    (xscheme-send-proceed)
+    (xscheme-send-control-g-interrupt)
+    (xscheme-send-control-u-interrupt)
+    (xscheme-send-control-x-interrupt)
+    (scheme-debugger-self-insert (last-command-event))))
+(crdt-register-remote-commands crdt-xscheme-commands)
 ;; xscheme doesn't use standard DEFINE-*-MODE facility
 ;; and doesn't call after-change-major-mode-hook.
 ;; Therefore we have to hack.
 (advice-add 'scheme-interaction-mode-initialize :after 'crdt--after-change-major-mode)
+(advice-add 'scheme-interaction-mode-initialize :after (crdt-make-publish-command-hook crdt-xscheme-commands))
 (advice-add 'scheme-debugger-mode-initialize :after
             (lambda () ;; haxxxx!!!!
               (let ((major-mode 'scheme-debugger-mode-initialize))
@@ -2882,10 +2930,12 @@ Use CRDT--UNINSTALL-PROCESS-ADVICES to disable those advices for the rescue."
 (defvar comint-input-ring-size)
 (defvar comint-input-ring-file-name)
 
-(crdt-register-remote-commands
- '((comint-send-input (point) (point))
-   (comint-send-region (region) (region))
-   (comint-send-eof (point))))
+(defvar crdt-comint-commands
+  '((comint-send-input (point) (point))
+    (comint-send-region (region) (region))
+    (comint-send-eof (point))))
+(crdt-register-remote-commands crdt-comint-commands)
+(add-hook 'comint-mode-hook (crdt-make-publish-command-hook crdt-comint-commands))
 
 (crdt-register-autoload 'shell-mode 'shell)
 (crdt-register-autoload 'inferior-scheme-mode 'cmuscheme)
@@ -2954,12 +3004,15 @@ This procedure is non-destructive."
 (add-hook 'crdt-mode-hook #'crdt--comint-mode-hook)
 
 ;;;; xref
-(crdt-register-remote-commands
- '((xref-find-definitions (point) (point))
-   (xref-find-references (point) (point))
-   (xref-show-location-at-point (point) (point))
-   (xref-pop-marker-stack () (point))
-   (xref-goto-xref (point) (point))))
+(defvar crdt-xref-commands
+  '((xref-find-definitions (point) (point))
+    (xref-find-references (point) (point))
+    (xref-show-location-at-point (point) (point))
+    (xref-pop-marker-stack () (point))
+    (xref-goto-xref (point) (point))))
+(crdt-register-remote-commands crdt-xref-commands)
+(defun crdt-xref-command-function (_user-id)
+  (mapcar #'car crdt-xref-commands))
 
 (defun crdt--xref-buffer-mode-hook ()
   (add-to-list 'crdt--enabled-text-properties 'xref-item)

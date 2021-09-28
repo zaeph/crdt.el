@@ -18,19 +18,6 @@ For base IDs, last two bytes are always representing Site ID.
 Stored strings are BASE-ID:OFFSETs. So the last two bytes represent offset,
 and second last two bytes represent Site ID.
 
-* Access Control
-  
-~crdt.el~ implements a capability based access control system.
-
-Each capability is a list of the form =(type transferable-p nonce . body)=
-
-  - read :: body takes the form =(buffer-name)=
-  - write :: body takes the form =(buffer-name)=
-  - command :: body takes the form =(buffer-name command-symbol)=
-    + =buffer-name= can be =t=, which means that =command-symbol= is not 
-      bound to be invoked in any specific buffer.
-  - process :: body takes the form =(buffer-name)=
-
 * Protocol
 
 Text-based version
@@ -42,6 +29,8 @@ Site IDs are /buffer local/ and temporarily assigned to users with writable acce
 Every message takes the form =(type . body)=
 
   - Text Editing
+    A peer must obtain a =site-id= before performing the following operations,
+    by remote calling =crdt-get-write-access=. See [[Remote Command]].
     + insert ::
       body takes the form =(buffer-name user-id crdt-id position-hint content)=
       - =position-hint= is the buffer position where the operation happens at the site
@@ -50,7 +39,7 @@ Every message takes the form =(type . body)=
       - =content= is the string to be inserted
 
     + delete ::
-      body takes the form =(buffer-name position-hint . crdt-id-list)=
+      body takes the form =(buffer-name user-id position-hint . crdt-id-list)=
       - =crdt-id-list= is generated from =CRDT--DUMP-IDS= from the deleted text
 
   - Peer State
@@ -58,8 +47,8 @@ Every message takes the form =(type . body)=
       body takes the form
            =(buffer-name user-id point-position-hint point-crdt-id mark-position-hint mark-crdt-id)=
       =*-crdt-id= can be either a CRDT ID, or
-        - =nil=, which means clear the point/mark
-        - =""=, which means =(point-max)=
+      - =nil=, which means clear the point/mark
+      - =""=, which means =(point-max)=
 
     + contact ::
       body takes the form
@@ -113,6 +102,9 @@ Every message takes the form =(type . body)=
       This message is sent from server to client to notice that some messages from the
       client is not processed due to error =(error-symbol . error-datum)=.
       Normally client should follow initial synchronization procedure to reinitialize the buffer.
+      - =buffer-name= can also be =nil=, which signifies that it's a session error.
+        The only reasonable thing to do is to disconnect in this scenario.
+        Currently, this happens when client/server protocol version doesn't match.
 
   - Buffer Service
     + add ::
@@ -151,26 +143,36 @@ Every message takes the form =(type . body)=
     + overlay-remove ::
       body takes the form =(buffer-name user-id logical-clock)=
 
-  - Remote Command
+  - <<Remote Command>>
+    + fcap ::
+      body takes the form =(buffer-name command-symbol nonce in-states out-states)=
+      This grants a "functional capability" to a peer.
+      Nonce is a random number to prevent forging capability.
+      - =buffer-name= can also be =nil=, which means this is a session-scoped command,
+        not bound to any specific buffer.
+      - =in-states= is a list of state symbols that the command depends on.
+        =out-states= is a list of state symbols that the command modifies and should be synchronized
+        to the caller.
+        See [[Allowed state symbols]].
+
     + command ::
       body takes the form
       #+BEGIN_SRC
-      (buffer-name spawn-user-id
-       user-id logical-clock state-list
-       command-symbol . args)
+      (buffer-name user-id logical-clock
+       spawn-user-id state-list nonce command-symbol . args)
       #+END_SRC
-       - =spawn-user-id= represents the site where the interactive command is originally invoked
-         + It can be different from =user-id= because a remote command can call a remote command!
-           This is especially useful when client makes a remote call, 
-           but the call on the server request some interactive input,
-           and such interactive call are remote-called back into the client.
-       - =state-list= is an alist of bindings.
-        (except that we use 1 element list for the CDRs, to save a dot in the serialized string)
-        (CDRs can also be 2 element list of the form =(crdt-id pos-hint)=)
-        Allowed symbols are 
-        #+BEGIN_SRC
-        buffer point mark mark-active transient-mark-mode last-command-event
-        #+END_SRC
+      - =spawn-user-id= represents the site where the interactive command is originally invoked
+        + It can be different from =user-id= because a remote command can call a remote command!
+          This is especially useful when client makes a remote call, 
+          but the call on the server request some interactive input,
+          and such interactive call are remote-called back into the client.
+      - =state-list= is an alist of bindings.
+       (except that we use 1 element list for the CDRs, to save a dot in the serialized string)
+       (CDRs can also be 2 element list of the form =(crdt-id pos-hint)=)
+       <<Allowed state symbols>> are 
+       #+BEGIN_SRC
+       buffer point mark mark-active transient-mark-mode last-command-event
+       #+END_SRC
 
     + return ::
       body takes the form =(user-id logical-clock state-list success-p . return-values)=
