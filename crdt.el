@@ -6,7 +6,7 @@
 ;; Maintainer: Qiantan Hong <qhong@alum.mit.edu>
 ;; URL: https://code.librehq.com/qhong/crdt.el
 ;; Keywords: collaboration crdt
-;; Version: 0.2.5
+;; Version: 0.2.6
 
 ;; This file is part of GNU Emacs.
 
@@ -35,7 +35,7 @@
 (require 'url)
 (require 'color)
 
-(defconst crdt-version "0.2.5")
+(defconst crdt-version "0.2.6")
 (defconst crdt-protocol-version "0.2.5")
 
 (defun crdt-version ()
@@ -1471,7 +1471,7 @@ CRDT--PROCESS should be bound to The network process for the client connection."
                                          (crdt--format-message
                                           `(cursor ,crdt--buffer-network-name ,site-id
                                                    ,point ,(crdt--get-id point)
-                                                   ,mark ,(crdt--get-id mark)))))))
+                                                   ,mark ,(when mark (crdt--get-id mark))))))))
               crdt--pseudo-cursor-table)
      (process-send-string crdt--process (crdt--format-message (crdt--local-cursor nil)))
 
