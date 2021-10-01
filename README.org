@@ -16,6 +16,13 @@ Highlights:
 
 ~crdt.el~ is now on GNU ELPA! Just =M-x package-install crdt=.
 
+*Caution!!!* Please make sure that you and your peers are on the same ~crdt.el~ version!
+It turns out to be one of the most common causes of ~crdt.el~ not working.
+Because currently the network protocol is not stablized, behavior when using mismatched versions is unexpectable.
+- Strictly speaking, it should works when =crdt-protocol-version= are defined and the same on all peers.
+  But why not save some hassle and keep everyone on the latest version.
+- To upgrade, just =M-x package-reinstall crdt=, then preferably restart Emacs.
+
 ** Start a shared session
 
 A shared session is a place that can contains multiple buffers (or files),
