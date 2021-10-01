@@ -6,7 +6,7 @@
 ;; Maintainer: Qiantan Hong <qhong@alum.mit.edu>
 ;; URL: https://code.librehq.com/qhong/crdt.el
 ;; Keywords: collaboration crdt
-;; Version: 0.2.6
+;; Version: 0.2.7
 
 ;; This file is part of GNU Emacs.
 
@@ -35,7 +35,7 @@
 (require 'url)
 (require 'color)
 
-(defconst crdt-version "0.2.6")
+(defconst crdt-version "0.2.7")
 (defconst crdt-protocol-version "0.2.5")
 
 (defun crdt-version ()
@@ -1632,19 +1632,17 @@ CRDT--PROCESS should be bound to The network process for the client connection."
             (with-current-buffer buffer
               (crdt-mode 0)
               (setq crdt--session nil))))))
-    (let ((notify-names
-           (cl-remove-if-not
-            (lambda (buffer-name)
-              (gethash buffer-name (crdt--session-buffer-table crdt--session)))
-            buffer-names)))
-      (when notify-names
-        (warn "Server stopped sharing %s."
-              (mapconcat #'identity buffer-names ", "))))
-   (let ((crdt--session saved-session))
-     (crdt--broadcast-maybe crdt--message-string
-                            (when crdt--process
-                              (process-get crdt--process 'client-id)))
-     (crdt--refresh-buffers-maybe))))
+    (let ((crdt--session saved-session))
+      (let ((notify-names
+             (cl-remove-if-not
+              (lambda (buffer-name)
+                (gethash buffer-name (crdt--session-buffer-table crdt--session)))
+              buffer-names)))
+        (when notify-names
+          (warn "Server stopped sharing %s."
+                (mapconcat #'identity buffer-names ", "))))
+      (crdt--broadcast-maybe crdt--message-string (when crdt--process (crdt--client-id)))
+      (crdt--refresh-buffers-maybe))))
 
 (define-crdt-message-handler login (id session-name)
   (puthash 0 (crdt--make-contact-metadata nil nil
