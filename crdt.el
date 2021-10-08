@@ -76,6 +76,13 @@
   "Start tuntox proxy for CRDT servers."
   :type '(choice boolean (const confirm)))
 
+(defcustom crdt-read-settings-help-string
+  (concat "\\[forms-next-field]:Next Field, \\[forms-prev-field]:Prev Field\n"
+          "\\[forms-next-record]:History Next, \\[forms-prev-record]:History Prev\n"
+          "\\[exit-recursive-edit]:OK, \\[abort-recursive-edit]:Cancel\n")
+  "Help string for `crdt-read-settings'."
+  :type 'string)
+
 (defcustom crdt-default-session-command-functions
   '((crdt-get-write-access)
     crdt-xref-command-function)
@@ -1902,73 +1909,85 @@ Current user means the user corresponding to CRDT--PROCESS."
       (unless (memq symbol crdt--ephemeral-advices)
         (advice-remove symbol wrapped-advice)))))
 
-(forms--mode-commands)
-
 (defvar crdt-read-settings-map
-  (let ((map (copy-keymap forms-mode-map)))
+  (let ((map (make-sparse-keymap)))
     (define-key map (kbd "<tab>") #'forms-next-field)
     (define-key map (kbd "<backtab>") #'forms-prev-field)
-    (define-key map (kbd "DEL") nil) ;; without this, DEL somehow get mapped to forms-prev-record
-    (define-key map (kbd "RET") #'exit-recursive-edit)
-    (define-key map (kbd "C-g") #'abort-recursive-edit)
-    (define-key map [remap forms-next-record] 'ignore)
-    (define-key map [remap forms-prev-record] 'ignore)
-    (define-key map [remap forms-first-record] 'ignore)
-    (define-key map [remap forms-last-record] 'ignore)
+    (define-key map "\C-m" #'exit-recursive-edit)
+    (define-key map "\C-g" #'abort-recursive-edit)
+    (define-key map "\M-n" 'forms-next-record)
+    (define-key map "\M-p" 'forms-prev-record)
+    (define-key map (kbd "M->") 'forms-first-record)
+    (define-key map (kbd "M-<") 'forms-last-record)
     (define-key map [remap forms-insert-record] 'ignore)
-    (define-key map [remap forms-jump-record] 'ignore)
+    ;; (define-key map [remap forms-jump-record] 'ignore)
     (define-key map [remap forms-exit] 'ignore)
     map))
 
-(defun crdt--read-settings (buffer-name settings-list)
+(defun crdt-read-settings (buffer-name settings-list)
+  "Display a form in a buffer for editing some settings.
+Use the buffer with BUFFER-NAME to display the form (create if
+not exist).  Use the buffer with BUFFER-NAME prepended by a space
+to store history (create if not exist).
+SETTINGS-LIST should be a list with elements of the form
+ (PROMPT DEFAULT-CONTENT &optional FUNCTION).  FUNCTION, if
+non-nil, is called on the user entered string to get the settings
+value.  Returns a list of settings values correpsonding to
+SETTINGS-LIST."
   (with-current-buffer (get-buffer-create buffer-name)
     (let ((enable-local-eval t)
-          (data-buffer (generate-new-buffer (concat " " buffer-name))))
+          (data-buffer (get-buffer-create (concat " " buffer-name)))
+          (default-content-string
+           (cl-loop for entry in settings-list
+                 concat (cadr entry)
+                 concat "\t")))
+      (aset default-content-string (1- (length default-content-string)) ?\n)
+      (let ((standard-output (current-buffer)))
+        (prin1
+         `(setq forms-file t
+                forms-number-of-fields ,(length settings-list)
+                forms-format-list
+                '(,(let ((overriding-local-map crdt-read-settings-map))
+                     (substitute-command-keys
+                      crdt-read-settings-help-string))
+                  ,@(cl-loop for i from 1
+                          for entry in settings-list
+                          nconc (list (car entry) i "\n"))))))
+      (crdt--call-with-ephemeral-advice
+       'forms--help 'ignore
+       (lambda ()
+         (crdt--call-with-ephemeral-advice
+          'find-file-noselect
+          (lambda (orig-func file)
+            (if (eq file t)
+                (with-current-buffer data-buffer
+                  (save-excursion
+                    (goto-char (point-max))
+                    (forward-line -1)
+                    (unless (looking-at-p (regexp-quote default-content-string))
+                      (goto-char (point-max))
+                      (insert default-content-string)))
+                  (current-buffer))
+              (funcall orig-func file)))
+          #'forms-mode)))
       (unwind-protect
            (progn
-             (let ((standard-output (current-buffer)))
-               (prin1
-                `(setq forms-file t
-                       forms-number-of-fields ,(length settings-list)
-                       forms-format-list
-                       '(,(let ((overriding-local-map crdt-read-settings-map))
-                            (substitute-command-keys
-                             (concat "\\[forms-next-field]:Next Field, \\[forms-prev-field]:Prev Field\n"
-                                     "\\[exit-recursive-edit]:OK, \\[abort-recursive-edit]:Cancel\n")))
-                         ,@(cl-loop for i from 1
-                                 for entry in settings-list
-                                 nconc (list (car entry) i "\n"))))))
-             (crdt--call-with-ephemeral-advice
-              'forms--help 'ignore
-              (lambda ()
-                (crdt--call-with-ephemeral-advice
-                 'find-file-noselect
-                 (lambda (orig-func file)
-                   (if (eq file t)
-                       (with-current-buffer data-buffer
-                         (cl-loop for entry in settings-list
-                               do (insert (cadr entry))
-                               do (insert "\t"))
-                         (backward-delete-char 1)
-                         (current-buffer))
-                     (funcall orig-func file)))
-                 #'forms-mode)))
-             (unwind-protect
-                  (progn
-                    (use-local-map crdt-read-settings-map)
-                    (display-buffer (current-buffer)
-                                    '(display-buffer-below-selected
-                                      (window-height . fit-window-to-buffer)))
-                    (select-window (get-buffer-window (current-buffer)))
-                    (recursive-edit)
-                    (forms--update)
-                    (cl-mapcar (lambda (entry data)
-                                 (funcall (or (caddr entry) #'identity) data))
-                               settings-list forms--the-record-list))
-               (forms-exit-no-save)
-               (unless (< (length (window-list)) 2)
-                 (delete-window (get-buffer-window (current-buffer))))))
-        (kill-buffer data-buffer)))))
+             (use-local-map crdt-read-settings-map)
+             (display-buffer (current-buffer)
+                             '(display-buffer-below-selected
+                               (window-height . fit-window-to-buffer)))
+             (select-window (get-buffer-window (current-buffer)))
+             (forms-last-record)
+             (let ((debug-on-error nil))
+               ;; avoid reaching start/end of history cause recursive edit to abort
+               (recursive-edit))
+             (forms--update)
+             (cl-mapcar (lambda (entry data)
+                          (funcall (or (caddr entry) #'identity) data))
+                        settings-list forms--the-record-list))
+        (kill-buffer (current-buffer))
+        (unless (< (length (window-list)) 2)
+          (delete-window (get-buffer-window (current-buffer))))))))
 
 (defun crdt--share-buffer (buffer session)
   "Add BUFFER to CRDT SESSION."
@@ -2026,7 +2045,7 @@ Create a new one if such a CRDT session doesn't exist."
      (current-buffer)
      (or session
          (apply #'crdt-new-session
-                (crdt--read-settings
+                (crdt-read-settings
                  (format "*Settings for %s*" session-name)
                  `(("Port: " "6530" ,(crdt--settings-make-ensure-type 'numberp))
                    ("Session Name: " ,session-name ,(crdt--settings-make-ensure-nonempty session-name))
@@ -2182,7 +2201,7 @@ If SESSION is nil, disconnect from the current session."
 Open a new buffer to display the shared content.
 Join with DISPLAY-NAME."
   (interactive
-   (crdt--read-settings
+   (crdt-read-settings
     "*CRDT Connect Settings*"
     `(("URL: " ":6530" ,(lambda (url)
                    (let (parsed-url)
