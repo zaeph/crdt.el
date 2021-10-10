@@ -30,7 +30,7 @@ Every message takes the form =(type . body)=
 
   - Text Editing
     A peer must obtain a =site-id= before performing the following operations,
-    by remote calling =crdt-get-write-access=. See [[Remote Command]].
+    by remote calling =crdt-get-write-access=. See [[Remote Function]].
     + insert ::
       body takes the form =(buffer-name user-id crdt-id position-hint content)=
       - =position-hint= is the buffer position where the operation happens at the site
@@ -143,26 +143,24 @@ Every message takes the form =(type . body)=
     + overlay-remove ::
       body takes the form =(buffer-name user-id logical-clock)=
 
-  - <<Remote Command>>
+  - <<Remote Function>>
     + fcap ::
-      body takes the form =(buffer-name command-symbol nonce in-states out-states)=
+      body takes the form =(fcap-symbol nonce in-states out-states . interactive-form)=
       This grants a "functional capability" to a peer.
       Nonce is a random number to prevent forging capability.
-      - =buffer-name= can also be =nil=, which means this is a session-scoped command,
-        not bound to any specific buffer.
-      - =in-states= is a list of state symbols that the command depends on.
-        =out-states= is a list of state symbols that the command modifies and should be synchronized
+      - =in-states= is a list of state symbols that the function depends on.
+        =out-states= is a list of state symbols that the function modifies and should be synchronized
         to the caller.
         See [[Allowed state symbols]].
 
-    + command ::
+    + funcall ::
       body takes the form
       #+BEGIN_SRC
-      (buffer-name user-id logical-clock
-       spawn-user-id state-list nonce command-symbol . args)
+      (user-id logical-clock spawn-user-id 
+        state-list nonce fcap-symbol . args)
       #+END_SRC
       - =spawn-user-id= represents the site where the interactive command is originally invoked
-        + It can be different from =user-id= because a remote command can call a remote command!
+        + It can be different from =user-id= because a remote function can call a remote function!
           This is especially useful when client makes a remote call, 
           but the call on the server request some interactive input,
           and such interactive call are remote-called back into the client.
@@ -171,7 +169,8 @@ Every message takes the form =(type . body)=
        (CDRs can also be 2 element list of the form =(crdt-id pos-hint)=)
        <<Allowed state symbols>> are 
        #+BEGIN_SRC
-       buffer point mark mark-active transient-mark-mode last-command-event
+       window window-point buffer buffer-content point
+       mark mark-active transient-mark-mode last-command-event
        #+END_SRC
 
     + return ::
