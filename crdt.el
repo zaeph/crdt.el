@@ -76,6 +76,26 @@
   "Start tuntox proxy for CRDT servers."
   :type '(choice boolean (const confirm)))
 
+(defcustom crdt-stunnel-executable "stunnel"
+  "Path to the stunnel binary."
+  :type 'file)
+
+(defcustom crdt-tls-certificate
+  (concat (file-name-as-directory (if (featurep 'xdg) (xdg-data-home) "~/"))
+          "crdt-tls.pem")
+  "Path to TLS certificate file used for TLS-secured server."
+  :type 'file)
+
+(defcustom crdt-tls-private-key
+  (concat (file-name-as-directory (if (featurep 'xdg) (xdg-data-home) "~/"))
+          "crdt-tls-key.pem")
+  "Path to TLS private key file used for TLS-secured server."
+  :type 'file)
+
+(defcustom crdt-use-stunnel t
+  "Start stunnel proxy for CRDT servers."
+  :type '(choice boolean (const confirm)))
+
 (defcustom crdt-read-settings-help-string
   (concat "\\[forms-next-field]:Next Field, \\[forms-prev-field]:Prev Field\n"
           "\\[forms-next-record]:History Next, \\[forms-prev-record]:History Prev\n"
@@ -2144,6 +2164,7 @@ Create a new one if such a CRDT session doesn't exist."
                 (crdt-read-settings
                  (format "*Settings for %s*" session-name)
                  `(("Port: " "6530" ,(crdt--settings-make-ensure-type 'numberp))
+                   ("Secure Port: " "6540" ,(crdt--settings-make-ensure-type 'numberp))
                    ("Session Name: " ,session-name ,(crdt--settings-make-ensure-nonempty session-name))
                    ("Password: " "")
                    ("Display Name: " ,crdt-default-name)
@@ -2164,9 +2185,59 @@ Create a new one if such a CRDT session doesn't exist."
           (message "Only server can stop sharing a buffer.")))
     (message "Not a CRDT shared buffer.")))
 
+(defun crdt-generate-certificate (save-path &optional certtool-executable log-file)
+  "Generate a self-signed certificate with private key.
+Store the .pem file to SAVE-PATH.  If CERTTOOL-EXECUTABLE is
+provided, it should be a path to a GnuTLS executable, which will
+be used.  Otherwise, search for gnutls-certtool, then certtool,
+in (EXEC-PATH).  Write diagnostic outputs to LOG-FILE.  If
+LOG-FILE is nil, append .log to SAVE-PATH and use that instead."
+  (setq save-path (expand-file-name save-path))
+  (setq log-file
+        (if log-file (expand-file-name log-file)
+          (concat save-path ".log")))
+  (unless certtool-executable
+    (setq certtool-executable
+          (or (locate-file "gnutls-certtool" (exec-path) exec-suffixes 1)
+              (locate-file "certtool" (exec-path) exec-suffixes 1))))
+  (unless certtool-executable
+    (signal 'file-error "Cannot locate GnuTLS certificate tool executable."))
+  (with-temp-file save-path
+    (let ((save-buffer (current-buffer)))
+      (unless (= 0 (call-process certtool-executable nil (list save-buffer log-file) nil "-p"))
+        (error "Failed to generate private key"))
+      (write-region nil nil save-path)
+      (with-temp-buffer
+        (insert "tls_www_server")
+        (unless (= 0 (call-process-region
+                      nil nil certtool-executable nil (list save-buffer log-file) nil
+                      "-s" "--load-privkey" save-path "--template=/dev/stdin"))
+          (error "Failed to generate certificate"))))))
+
+(defun crdt-start-stunnel (port secure-port)
+  "Start a stunnel proxy that forwards SECURE-PORT to PORT.
+Return the stunnel proxy process."
+  (unless (file-exists-p crdt-tls-certificate)
+    (if (yes-or-no-p (format "%s does not exist. Generate a self-signing certificate? "
+                             crdt-tls-certificate))
+        (crdt-generate-certificate crdt-tls-certificate)
+      (error "TLS certificate %s does not exist" crdt-tls-certificate)))
+  (let ((stunnel-process
+         (make-process :name "Stunnel Proxy"
+                       :buffer (generate-new-buffer "*Stunnel Proxy*")
+                       :command '("stunnel" "/dev/stdin"))))
+    (display-buffer (process-buffer stunnel-process))
+    (process-send-string stunnel-process
+                         (format "foreground=yes\ncert=%s\nkey=%s\n[ein]\naccept=%d\nconnect=%d\n"
+                                 crdt-tls-certificate crdt-tls-certificate secure-port port))
+    (process-send-eof stunnel-process)
+    stunnel-process))
+
 (defun crdt-new-session
-    (port session-name password display-name permissions)
+    (port secure-port session-name password display-name permissions)
   "Start a new CRDT session on PORT with SESSION-NAME.
+When CRDT-USE-STUNNEL is non nil, also start a stunnel proxy on SECURE-PORT,
+otherwise SECURE-PORT is ignored.
 Setup up the server with PASSWORD and assign this Emacs DISPLAY-NAME.
 PERMISSIONS is a list that describes policies
 for public session-scoped functionss.
@@ -2199,7 +2270,7 @@ Each element should be one of
                             (yes-or-no-p "Start a tuntox proxy for this session? ")))))
     (process-put network-process 'crdt-session new-session)
     (push new-session crdt--session-list)
-    (if tuntox-p
+    (if tuntox-p ; TODO: factor this out like `crdt-start-stunnel'
         (let ((proxy-process
                (make-process :name "Tuntox Proxy"
                              :buffer (generate-new-buffer "*Tuntox Proxy*")
@@ -2209,12 +2280,16 @@ Each element should be one of
                                "-f" "/dev/stdin" ; do the filtering for safety sake
                                ,@ (when (and password (> (length password) 0))
                                     `("-s" ,password))))))
+          (display-buffer (process-buffer proxy-process))
           (process-put network-process 'tuntox-process proxy-process)
           (process-send-string proxy-process (format "127.0.0.1:%s\n" port)) ; only allow connection to our port
-          (process-send-eof proxy-process)
-          (switch-to-buffer-other-window (process-buffer proxy-process)))
+          (process-send-eof proxy-process))
       (when (and password (> (length password) 0))
         (process-put network-process 'password password)))
+    (when crdt-use-stunnel
+      (condition-case c
+          (process-put network-process 'stunnel-process (crdt-start-stunnel port secure-port))
+        (error (warn "Stunnel proxy not started: %s" c))))
     new-session))
 
 (defun crdt--stop-session (session)
@@ -2245,13 +2320,14 @@ Each element should be one of
           (delq session crdt--session-list))
     (crdt--refresh-sessions-maybe)
     (let* ((process (crdt--session-network-process session))
-           (proxy-process (process-get process 'tuntox-process))
            (process-buffer (process-buffer process)))
       (delete-process (crdt--session-network-process session))
       (when (and process-buffer (buffer-live-p process-buffer))
         (kill-buffer process-buffer))
-      (when (and proxy-process (process-live-p proxy-process))
-        (interrupt-process proxy-process)))
+      (dolist (proxy-process (list (process-get process 'tuntox-process)
+                                   (process-get process 'stunnel-process)))
+        (when (and proxy-process (process-live-p proxy-process))
+          (interrupt-process proxy-process))))
     (unless (memq this-command '(crdt-disconnect crdt-stop-session crdt--stop-session))
       (warn "CRDT session %s disconnected." (crdt--session-name session)))))
 
@@ -2301,56 +2377,71 @@ Join with DISPLAY-NAME."
   (interactive
    (crdt-read-settings
     "*CRDT Connect Settings*"
-    `(("URL: " ":6530" ,(lambda (url)
+    `(("URL: " "" ,(lambda (url)
                    (let (parsed-url)
                      (when (eq (length url) 0)
                        (error "Please input a valid URL"))
                      (setq parsed-url (url-generic-parse-url url))
                      (when (or (not (url-type parsed-url))
                                (string-equal (url-type parsed-url) "localhost")) ; for ease of local debugging
-                       (setq parsed-url (url-generic-parse-url (concat "tcp://" url))))
-                     (when (and (not (url-portspec parsed-url)) (member (url-type parsed-url) '("tcp" "tuntox")))
-                       (let ((port (read-from-minibuffer "Server port (default 6530): " nil nil t nil "6530")))
-                         (unless (numberp port)
-                           (error "Port must be a number"))
-                         (setf (url-portspec parsed-url) port)))
+                       (setq parsed-url (url-generic-parse-url (concat "eins://" url))))
+                     (when (not (url-portspec parsed-url))
+                       (pcase (url-type parsed-url)
+                         ("eins" (setf (url-portspec parsed-url) 6540))
+                         ("ein" (setf (url-portspec parsed-url) 6530))
+                         ("tuntox" (setf (url-portspec parsed-url) 6530))))
                      parsed-url)))
       ("Display Name: " ,crdt-default-name ,(crdt--settings-make-ensure-nonempty crdt-default-name)))))
-  (let ((url-type (url-type url))
-        address port)
-    (cl-macrolet ((start-session (&body body)
-                    `(let* ((network-process (make-network-process
-                                              :name "CRDT Client"
-                                              :buffer (generate-new-buffer " *crdt-client*")
-                                              :host address
-                                              :service port
-                                              :filter #'crdt--network-filter
-                                              :sentinel #'crdt--client-process-sentinel))
-                            (name-placeholder (format "%s:%s" address port))
-                            (new-session
-                             (crdt--make-session :local-clock 0
-                                                 :local-name display-name
-                                                 :name name-placeholder
-                                                 :network-process network-process)))
-                      (process-put network-process 'crdt-session new-session)
-                      (push new-session crdt--session-list)
-                      ,@body
-                      (process-send-string
-                       network-process
-                       (crdt--format-message
-                        `(hello ,(crdt--session-local-name new-session) ,crdt-protocol-version)))
-                      (let ((crdt--session new-session))
-                        (crdt-list-buffers)))))
-      (cond ((equal url-type "tcp")
-             (setq address (url-host url))
-             (setq port (url-portspec url))
-             (start-session))
+  (let ((url-type (url-type url)))
+    (cl-flet ((start-session (&rest process-args)
+                (let* ((network-process (apply #'make-network-process
+                                               :name "CRDT Client"
+                                               :buffer (generate-new-buffer " *crdt-client*")
+                                               :filter #'crdt--network-filter
+                                               :sentinel #'crdt--client-process-sentinel
+                                               process-args))
+                       (name-placeholder (url-recreate-url url))
+                       (new-session
+                        (crdt--make-session :local-clock 0
+                                            :local-name display-name
+                                            :name name-placeholder
+                                            :network-process network-process)))
+                  (process-put network-process 'crdt-session new-session)
+                  (push new-session crdt--session-list)
+                  (process-send-string
+                   network-process
+                   (crdt--format-message
+                    `(hello ,(crdt--session-local-name new-session) ,crdt-protocol-version)))
+                  (let ((crdt--session new-session))
+                    (crdt-list-buffers))
+                  network-process)))
+      (cond ((equal url-type "ein")
+             (start-session :host (url-host url) :service (url-portspec url)))
+            ((equal url-type "eins")
+             (condition-case c
+                 (let ((proc
+                        (start-session :host (url-host url) :service (url-portspec url)
+                                       :tls-parameters
+                                       (cons 'gnutls-x509pki
+                                             (gnutls-boot-parameters
+                                              :type 'gnutls-x509pki
+                                              :hostname (url-host url))))))
+                   (message "%s" (process-status proc))
+                   (unless (eq (process-status proc) 'open)
+                     (signal 'file-error "Failed to establish TLS connection."))
+                   proc)
+               (file-error
+                (if (not (= (url-portspec url) 6540))
+                    (signal (car c) (cdr c))
+                  (let ((old-url-string (url-recreate-url url)))
+                    (setf (url-portspec url) 6530 (url-type url) "ein")
+                    (warn "Failed to connect to %s, falling back to %s" old-url-string (url-recreate-url url))
+                    (start-session :host (url-host url) :service (url-portspec url)))))))
             ((equal url-type "tuntox")
-             (setq address "127.0.0.1")
-             (setq port (read-from-minibuffer (format "tuntox proxy port (default %s): "
-                                                      (1+ (url-portspec url)))
-                                              nil nil t nil (format "%s" (1+ (url-portspec url)))))
-             (let ((password (read-passwd "tuntox password (empty for no password): ")))
+             (let ((port (read-from-minibuffer (format "tuntox proxy port (default %s): "
+                                                       (1+ (url-portspec url)))
+                                               nil nil t nil (format "%s" (1+ (url-portspec url)))))
+                   (password (read-passwd "tuntox password (empty for no password): ")))
                (switch-to-buffer-other-window
                 (process-buffer
                  (make-process
@@ -2375,8 +2466,10 @@ Join with DISPLAY-NAME."
                               (unless initialized
                                 (when (ignore-errors (search-backward "Friend request accepted"))
                                   (setq initialized t)
-                                  (start-session (process-put network-process 'tuntox-process proc)))))
-                            (if moving (goto-char (process-mark proc)))))))))))))
+                                  (process-put (start-session :host "127.0.0.1" :service port)
+                                               'tuntox-process proc))))
+                            (if moving (goto-char (process-mark proc)))))))))))
+               nil))
             (t (error "Unknown protocol \"%s\"" url-type))))))
 
 ;;; overlay tracking
