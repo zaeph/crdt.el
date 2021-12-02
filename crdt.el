@@ -2164,7 +2164,8 @@ Create a new one if such a CRDT session doesn't exist."
                 (crdt-read-settings
                  (format "*Settings for %s*" session-name)
                  `(("Port: " "6530" ,(crdt--settings-make-ensure-type 'numberp))
-                   ("Secure Port: " "6540" ,(crdt--settings-make-ensure-type 'numberp))
+                   ("Secure Port: " ,(if crdt-use-stunnel "6540" "--")
+                                    ,(when crdt-use-stunnel (crdt--settings-make-ensure-type 'numberp)))
                    ("Session Name: " ,session-name ,(crdt--settings-make-ensure-nonempty session-name))
                    ("Password: " "")
                    ("Display Name: " ,crdt-default-name)
@@ -2426,7 +2427,6 @@ Join with DISPLAY-NAME."
                                              (gnutls-boot-parameters
                                               :type 'gnutls-x509pki
                                               :hostname (url-host url))))))
-                   (message "%s" (process-status proc))
                    (unless (eq (process-status proc) 'open)
                      (signal 'file-error "Failed to establish TLS connection."))
                    proc)
