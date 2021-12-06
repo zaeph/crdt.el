@@ -42,31 +42,32 @@ Every message takes the form =(type . body)=
       body takes the form =(buffer-name user-id position-hint . crdt-id-list)=
       - =crdt-id-list= is generated from =CRDT--DUMP-IDS= from the deleted text
 
-  - Peer State
     + cursor ::
       body takes the form
            =(buffer-name user-id point-position-hint point-crdt-id mark-position-hint mark-crdt-id)=
       =*-crdt-id= can be either a CRDT ID, or
       - =nil=, which means clear the point/mark
       - =""=, which means =(point-max)=
+  
+  - Contact information
 
     + contact ::
-      body takes the form
-           =(user-id name address port)=
-      when name is =nil=, clear the contact for this =user-id=
+      body takes the form =(user-id slot value)=
+      - =slot= can be one of
+        #+BEGIN_SRC emacs-lisp
+          name host service focus
+        #+END_SRC
 
-    + focus ::
-      body takes the form =(user-id buffer-name)=
+    + leave ::
+      body takes the form =(user-id)=
+      
+      This message is sometime sent from client to server to indicate disconnection, 
+      if the underlying proxy doesn't indicate disconnection properly.
 
   - Login
     + hello ::
       This message is sent from client to server, when a client connect to the server.
-      body takes the form =(client-name protocol-version &optional response)=
-
-    + leave ::
-      This message is sometime sent from client to server to indicate disconnection, 
-      if the underlying proxy doesn't handle it properly.
-      body takes the form =()=
+      body takes the form =(protocol-version &optional response)=
 
     + challenge ::
       body takes the form =(salt)=
@@ -74,7 +75,7 @@ Every message takes the form =(type . body)=
     + login ::
       It's always sent after server receives a hello message.
       Assigns a User ID to the client
-      body takes the form =(user-id session-name)=.
+      body takes the form =(user-id)=.
 
   - Initial Synchronization
     + sync ::
@@ -332,15 +333,12 @@ Q: What if Emacs GCs?
         - =nil=, which means clear the point/mark
 
     + contact :: same as primary protocol.
-
-    + focus :: same as primary protocol.
+    + leave :: same as primary protocol.
 
   - Login
     Note that we don't include challenge/response authentication mecahnism.
 
     + hello :: same as primary protocol.
-    + leave :: same as primary protocol.
-
     + login :: same as primary protocol.
 
   - Initial Synchronization
