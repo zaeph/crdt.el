@@ -1006,7 +1006,8 @@ user menu almost always indicate supposed changes in buffer menu."
            (crdt--contact-metadata-name
             (gethash (crdt--session-follow-user-id crdt--session)
                      (crdt--session-contact-table crdt--session))))
-  (setf (crdt--session-follow-user-id crdt--session) nil))
+  (setf (crdt--session-follow-user-id crdt--session) nil)
+  (crdt--refresh-users-maybe))
 
 (defun crdt--kill-buffer-hook ()
   "Kill buffer hook for CRDT shared buffers.
