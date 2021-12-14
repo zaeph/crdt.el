@@ -688,26 +688,35 @@ Otherwise, return the list of names for client sessions."
   (cl-find name crdt--session-list
            :test 'equal :key #'crdt--session-urlstr))
 
+(defsubst crdt--completing-read (prompt collection &optional initial-input)
+  "Like (completing-read PROMPT COLLECTION nil t INITIAL-INPUT).
+Do better when there are 0 or 1 candidates."
+  (if collection
+      (if (cdr collection)
+          (completing-read prompt collection nil t initial-input)
+        (car collection))
+    (signal 'quit "No candidates")))
+
 (defun crdt--read-session (&optional filter)
   "Prompt for a session name and return the corresponding session.
 FILTER can be nil, 'server or 'client."
   (crdt--get-session
-   (completing-read (format "Choose a%s session: "
-                            (cl-ecase filter
-                              ((server) " server")
-                              ((client) " client")
-                              ((nil) "")))
-                    (cl-ecase filter
-                      ((server) (crdt--get-session-names t))
-                      ((client) (crdt--get-session-names nil))
-                      ((nil) (mapcar #'crdt--session-urlstr crdt--session-list)))
-                    nil t
-                    (when (and crdt--session
-                               (cl-ecase filter
-                                 ((server) (crdt--server-p))
-                                 ((client) (not (crdt--server-p)))
-                                 ((nil) t)))
-                      (crdt--session-urlstr crdt--session)))))
+   (crdt--completing-read
+    (format "Choose a%s session: "
+            (cl-ecase filter
+              ((server) " server")
+              ((client) " client")
+              ((nil) "")))
+    (cl-ecase filter
+      ((server) (crdt--get-session-names t))
+      ((client) (crdt--get-session-names nil))
+      ((nil) (mapcar #'crdt--session-urlstr crdt--session-list)))
+    (when (and crdt--session
+               (cl-ecase filter
+                 ((server) (crdt--server-p))
+                 ((client) (not (crdt--server-p)))
+                 ((nil) t)))
+      (crdt--session-urlstr crdt--session)))))
 
 (defun crdt--read-session-maybe (&optional filter)
   "Prompt for a session name and return the corresponding session.
@@ -782,12 +791,12 @@ If DISPLAY-BUFFER is provided, display the output there."
 
 (defun crdt--read-buffer (session)
   "Prompt for a buffer network name in SESSION."
-  (completing-read "Choose a buffer: "
-                   (hash-table-keys (crdt--session-buffer-table session))
-                   nil t
-                   (when (and (eq crdt--session session)
-                              crdt--buffer-network-name)
-                     crdt--buffer-network-name)))
+  (crdt--completing-read
+   "Choose a buffer: "
+   (hash-table-keys (crdt--session-buffer-table session))
+   (when (and (eq crdt--session session)
+              crdt--buffer-network-name)
+     crdt--buffer-network-name)))
 
 (defun crdt--read-buffer-maybe (session)
   "Prompt for a buffer network name in SESSION.
@@ -876,8 +885,7 @@ Directly return the buffer network name under point if in the buffer menu."
        (push (format "%s %s" k (crdt--contact-metadata-name v)) candidates))
      (crdt--session-contact-table session))
     (let ((name
-           (completing-read "Choose a user: "
-                            candidates nil t)))
+           (crdt--completing-read "Choose a user: " candidates)))
       (string-to-number (car (split-string name))))))
 
 (defun crdt--read-user-maybe (session)
