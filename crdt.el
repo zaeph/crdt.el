@@ -81,12 +81,12 @@
   :type 'file)
 
 (defcustom crdt-tls-certificate
-  (concat user-emacs-directory "crdt-tls.pem")
+  (locate-user-emacs-file "crdt-tls.pem")
   "Path to TLS certificate file used for TLS-secured server."
   :type 'file)
 
 (defcustom crdt-tls-private-key
-  (concat user-emacs-directory "crdt-tls.pem")
+  (locate-user-emacs-file "crdt-tls.pem")
   "Path to TLS private key file used for TLS-secured server."
   :type 'file)
 
@@ -115,7 +115,7 @@ See `crdt-new-session'.'"
   "Override local commands with corresponding remote commands when available."
   :type 'boolean)
 
-(defcustom crdt-region-alpha 0.5
+(defcustom crdt-region-alpha 0.2
   "Alpha value for highlighting selections."
   :type 'float)
 
@@ -428,7 +428,7 @@ and CRDT--DISABLE-OVERLAY-SPECIES to modify this variable
 as those functions handle bookkeeping of
 adding/removing actively tracked overlays.")
 
-(defvar-local crdt--enabled-text-properties nil
+(defvar-local crdt--enabled-text-properties '(crdt-author)
   "A list of text properties that are tracked and synchronized.")
 
 ;;; Global variables
