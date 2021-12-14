@@ -349,7 +349,7 @@ Must be used inside CRDT--WITH-INSERTION-INFORMATION."
   ;; Special case: key nil may be mapped to a metadata for a client
   ;; itself before it gets its user-id. It should be remapped to
   ;; the right key as soon as client knows its user-id
-  name
+  urlstr
   user-menu-buffer
   buffer-menu-buffer
   network-process
@@ -649,7 +649,7 @@ until synchronization is completed, otherwise run body asynchronously."
          (with-current-buffer crdt-buffer
            ,@body)
        (unless (crdt--server-p)
-         (setq crdt-buffer (generate-new-buffer (format "%s<%s>" ,name (crdt--session-name crdt--session))))
+         (setq crdt-buffer (generate-new-buffer (format "%s<%s>" ,name (crdt--session-urlstr crdt--session))))
          (puthash ,name crdt-buffer (crdt--session-buffer-table crdt--session))
          (let ((session crdt--session))
            (with-current-buffer crdt-buffer
@@ -680,13 +680,13 @@ Otherwise, return the list of names for client sessions."
   (let (session-names)
     (dolist (session crdt--session-list)
       (when (eq (crdt--server-p session) server)
-        (push (crdt--session-name session) session-names)))
+        (push (crdt--session-urlstr session) session-names)))
     (nreverse session-names)))
 
 (defsubst crdt--get-session (name)
   "Get the CRDT session object with NAME."
   (cl-find name crdt--session-list
-           :test 'equal :key #'crdt--session-name))
+           :test 'equal :key #'crdt--session-urlstr))
 
 (defun crdt--read-session (&optional filter)
   "Prompt for a session name and return the corresponding session.
@@ -700,14 +700,14 @@ FILTER can be nil, 'server or 'client."
                     (cl-ecase filter
                       ((server) (crdt--get-session-names t))
                       ((client) (crdt--get-session-names nil))
-                      ((nil) (mapcar #'crdt--session-name crdt--session-list)))
+                      ((nil) (mapcar #'crdt--session-urlstr crdt--session-list)))
                     nil t
                     (when (and crdt--session
                                (cl-ecase filter
                                  ((server) (crdt--server-p))
                                  ((client) (not (crdt--server-p)))
                                  ((nil) t)))
-                      (crdt--session-name crdt--session)))))
+                      (crdt--session-urlstr crdt--session)))))
 
 (defun crdt--read-session-maybe (&optional filter)
   "Prompt for a session name and return the corresponding session.
@@ -758,7 +758,7 @@ If DISPLAY-BUFFER is provided, display the output there."
     (setq tabulated-list-entries nil)
     (mapc (lambda (session)
             (push
-             (list session (vector (crdt--session-name session)
+             (list session (vector (crdt--session-urlstr session)
                                    (if (crdt--server-p session) "Server" "Client")
                                    (crdt--session-local-name session)
                                    (mapconcat (lambda (v) (format "%s" v))
@@ -831,7 +831,7 @@ Directly return the buffer network name under point if in the buffer menu."
         (error "Not a CRDT shared buffer"))
       (unless (and (crdt--session-buffer-menu-buffer crdt--session) (buffer-live-p (crdt--session-buffer-menu-buffer crdt--session)))
         (setf (crdt--session-buffer-menu-buffer crdt--session)
-              (generate-new-buffer (format "*CRDT Buffers %s*" (crdt--session-name crdt--session))))
+              (generate-new-buffer (format "*CRDT Buffers %s*" (crdt--session-urlstr crdt--session))))
         (crdt--assimilate-session (crdt--session-buffer-menu-buffer crdt--session)))
       (let ((display-buffer (crdt--session-buffer-menu-buffer crdt--session)))
         (crdt-refresh-buffers display-buffer)
@@ -948,7 +948,7 @@ Only server can perform this action."
         (error "Not a CRDT shared buffer"))
       (unless (and (crdt--session-user-menu-buffer crdt--session) (buffer-live-p (crdt--session-user-menu-buffer crdt--session)))
         (setf (crdt--session-user-menu-buffer crdt--session)
-              (generate-new-buffer (format "*CRDT Users %s*" (crdt--session-name crdt--session))))
+              (generate-new-buffer (format "*CRDT Users %s*" (crdt--session-urlstr crdt--session))))
         (crdt--assimilate-session (crdt--session-user-menu-buffer crdt--session)))
       (let ((display-buffer (crdt--session-user-menu-buffer crdt--session)))
         (crdt-refresh-users display-buffer)
@@ -2157,7 +2157,7 @@ Create a new one if such a CRDT session doesn't exist."
    (progn
      (when (and crdt-mode crdt--session)
        (error "Current buffer is already shared in a CRDT session"))
-     (list (let* ((session-names (mapcar #'crdt--session-name crdt--session-list))
+     (list (let* ((session-names (mapcar #'crdt--session-urlstr crdt--session-list))
                   (session-name (and session-names
                                    (completing-read "Choose a session (create if not exist): " session-names))))
              session-name))))
@@ -2336,7 +2336,7 @@ Each element should be one of
         (when (and proxy-process (process-live-p proxy-process))
           (interrupt-process proxy-process))))
     (unless (memq this-command '(crdt-disconnect crdt-stop-session crdt--stop-session))
-      (warn "CRDT session %s disconnected." (crdt--session-name session)))))
+      (warn "CRDT session %s disconnected." (crdt--session-urlstr session)))))
 
 (defun crdt-stop-session (&optional session)
   "Stop sharing the SESSION.
