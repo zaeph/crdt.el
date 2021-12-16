@@ -2344,7 +2344,7 @@ Each element should be one of
         (when (and proxy-process (process-live-p proxy-process))
           (interrupt-process proxy-process))))
     (unless (memq this-command '(crdt-disconnect crdt-stop-session crdt--stop-session))
-      (warn "CRDT session %s disconnected." (crdt--session-urlstr session)))))
+      (warn "CRDT Session %s disconnected." (crdt--session-urlstr session)))))
 
 (defun crdt-stop-session (&optional session)
   "Stop sharing the SESSION.
