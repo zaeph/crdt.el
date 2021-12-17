@@ -350,6 +350,8 @@ Must be used inside CRDT--WITH-INSERTION-INFORMATION."
   ;; itself before it gets its user-id. It should be remapped to
   ;; the right key as soon as client knows its user-id
   urlstr
+  roger-p ;; set to t when network filter hear any data
+  ;; to indicate that TLS handshake (if any) must have completed
   user-menu-buffer
   buffer-menu-buffer
   network-process
@@ -1921,6 +1923,8 @@ Handle received STRING from PROCESS."
   (with-current-buffer (process-buffer process)
     (unless crdt--session
       (setq crdt--session (process-get process 'crdt-session)))
+    (when (> (length string) 0)
+      (setf (crdt--session-roger-p crdt--session) t))
     (save-excursion
       (goto-char (process-mark process))
       (insert string)
@@ -1984,16 +1988,16 @@ Handle received STRING from PROCESS."
 (defun crdt--client-process-sentinel (process _message)
   (unless (eq (process-status process) 'open)
     (let ((session (process-get process 'crdt-session)))
-      (if session
-          (progn
-            (when (process-get process 'tuntox-process)
-              (process-send-string
-               process
-               (crdt--format-message `(leave ,(crdt--session-local-id session)))))
-            (ding)
-            (crdt--stop-session session))
-        ;; This should only happens when we are in the middle of TLS handshake
-        (signal 'file-error "Failed to establish TLS connection.")))))
+      (when session
+        (if (and (not (crdt--session-roger-p session))
+                 (process-get proc 'crdt--downgrade-continuation))
+            ;; This should only happens when we are in the middle of TLS handshake
+            (funcall (process-get proc 'crdt--downgrade-continuation))
+          (when (process-get process 'tuntox-process)
+            (process-send-string
+             process
+             (crdt--format-message `(leave ,(crdt--session-local-id session)))))
+          (crdt--stop-session session))))))
 
 ;;; UI commands
 
@@ -2277,7 +2281,7 @@ Each element should be one of
                               :next-user-id 1
                               :local-name display-name
                               :host "localhost" :service port
-                              :name (format "localhost:%s" port)
+                              :urlstr (format "localhost:%s" port)
                               :network-process network-process
                               :permissions permissions))
          (tuntox-p (or (eq crdt-use-tuntox t)
@@ -2420,48 +2424,49 @@ Join with DISPLAY-NAME."
       ("eins" (setf (url-portspec url) 6540))
       ("ein" (setf (url-portspec url) 6530))
       ("tuntox" (setf (url-portspec url) 6530))))
-  (let ((url-type (url-type url)))
+  (let ((url-type (url-type url))
+        (new-session (crdt--make-session :local-clock 0 :local-name display-name)))
     (cl-flet ((start-session (&rest process-args)
                 (let* ((network-process (apply #'make-network-process
                                                :name "CRDT Client"
                                                :buffer (generate-new-buffer " *crdt-client*")
                                                :filter #'crdt--network-filter
                                                :sentinel #'crdt--client-process-sentinel
-                                               process-args))
-                       (new-session
-                        (crdt--make-session :name (url-recreate-url url)
-                                            :local-clock 0 :local-name display-name
-                                            :network-process network-process)))
+                                               process-args)))
+                  (setf (crdt--session-urlstr new-session) (url-recreate-url url)
+                        (crdt--session-network-process new-session) network-process)
                   (process-put network-process 'crdt-session new-session)
-                  (push new-session crdt--session-list)
                   (process-send-string
                    network-process
                    (crdt--format-message
                     `(hello ,crdt-protocol-version)))
-                  (let ((crdt--session new-session))
-                    (crdt-list-buffers))
                   network-process)))
       (cond ((equal url-type "ein")
              (start-session :host (url-host url) :service (url-portspec url)))
             ((equal url-type "eins")
-             (condition-case c
-                 (let ((proc
-                        (start-session :host (url-host url) :service (url-portspec url)
-                                       :tls-parameters
-                                       (cons 'gnutls-x509pki
-                                             (gnutls-boot-parameters
-                                              :type 'gnutls-x509pki
-                                              :hostname (url-host url))))))
-                   (unless (eq (process-status proc) 'open)
-                     (signal 'file-error "Failed to establish TLS connection."))
-                   proc)
-               (file-error
-                (if (not (= (url-portspec url) 6540))
-                    (signal (car c) (cdr c))
-                  (let ((old-url-string (url-recreate-url url)))
-                    (setf (url-portspec url) 6530 (url-type url) "ein")
-                    (warn "Failed to connect to %s, falling back to %s" old-url-string (url-recreate-url url))
-                    (start-session :host (url-host url) :service (url-portspec url)))))))
+             (cl-flet ((downgrade ()
+                         (let ((old-url-string (url-recreate-url url)))
+                           (setf (url-portspec url) 6530 (url-type url) "ein")
+                           (warn "Failed to connect to %s, falling back to %s" old-url-string (url-recreate-url url))
+                           (start-session :host (url-host url) :service (url-portspec url)))))
+               (condition-case c
+                   (let ((proc
+                          (start-session :host (url-host url) :service (url-portspec url)
+                                         :tls-parameters
+                                         (cons 'gnutls-x509pki
+                                               (gnutls-boot-parameters
+                                                :type 'gnutls-x509pki
+                                                :hostname (url-host url)))))
+                         (when (= (url-portspec url) 6540)
+                           (process-put proc 'crdt--downgrade-continuation
+                                        (lambda ()
+                                          (process-put proc 'crdt--downgrade-continuation nil)
+                                          (downgrade))))
+                         proc))
+                 (file-error
+                  (if (= (url-portspec url) 6540)
+                      (downgrade)
+                    (signal (car c) (cdr c)))))))
             ((equal url-type "tuntox")
              (let ((port (read-from-minibuffer (format "tuntox proxy port (default %s): "
                                                        (1+ (url-portspec url)))
@@ -2495,7 +2500,11 @@ Join with DISPLAY-NAME."
                                                'tuntox-process proc))))
                             (if moving (goto-char (process-mark proc)))))))))))
                nil))
-            (t (error "Unknown protocol \"%s\"" url-type))))))
+            (t (error "Unknown protocol \"%s\"" url-type)))
+      (push new-session crdt--session-list)
+      (let ((crdt--session new-session))
+        (crdt-list-buffers))
+      new-session)))
 
 ;;; overlay tracking
 
