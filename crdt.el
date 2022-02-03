@@ -135,11 +135,14 @@ See `crdt-new-session'.'"
 
 (defun crdt--get-region-color (user-id)
   "Get region color for USER-ID."
-  (apply #'color-rgb-to-hex
-         (cl-mapcar
-          (lambda (a b) (+ (* a crdt-region-alpha) (* b (- 1.0 crdt-region-alpha))))
-          (nth (mod user-id (length crdt-cursor-colors)) crdt-cursor-colors)
-          (color-name-to-rgb (face-attribute 'default :background)))))
+  (let ((background-rgb (color-name-to-rgb (face-attribute 'default :background))))
+    (if background-rgb
+        (apply #'color-rgb-to-hex
+               (cl-mapcar
+                (lambda (a b) (+ (* a crdt-region-alpha) (* b (- 1.0 crdt-region-alpha))))
+                (nth (mod user-id (length crdt-cursor-colors)) crdt-cursor-colors)
+                background-rgb))
+      (crdt--get-cursor-color user-id))))
 
 (defun crdt--move-cursor (ov pos)
   "Move pseudo cursor overlay OV to POS."
@@ -1990,9 +1993,9 @@ Handle received STRING from PROCESS."
     (let ((session (process-get process 'crdt-session)))
       (when session
         (if (and (not (crdt--session-roger-p session))
-                 (process-get proc 'crdt--downgrade-continuation))
+                 (process-get process 'crdt--downgrade-continuation))
             ;; This should only happens when we are in the middle of TLS handshake
-            (funcall (process-get proc 'crdt--downgrade-continuation))
+            (funcall (process-get process 'crdt--downgrade-continuation))
           (when (process-get process 'tuntox-process)
             (process-send-string
              process
@@ -2397,19 +2400,19 @@ Join with DISPLAY-NAME."
    (crdt-read-settings
     "*CRDT Connect Settings*"
     `(("URL: " "" ,(lambda (url)
-                   (let (parsed-url)
-                     (when (eq (length url) 0)
-                       (error "Please input a valid URL"))
-                     (setq parsed-url (url-generic-parse-url url))
-                     (when (or (not (url-type parsed-url))
-                               (string-equal (url-type parsed-url) "localhost")) ; for ease of local debugging
-                       (setq parsed-url (url-generic-parse-url (concat "eins://" url))))
-                     (when (not (url-portspec parsed-url))
-                       (pcase (url-type parsed-url)
-                         ("eins" (setf (url-portspec parsed-url) 6540))
-                         ("ein" (setf (url-portspec parsed-url) 6530))
-                         ("tuntox" (setf (url-portspec parsed-url) 6530))))
-                     parsed-url)))
+                     (let (parsed-url)
+                       (when (eq (length url) 0)
+                         (error "Please input a valid URL"))
+                       (setq parsed-url (url-generic-parse-url url))
+                       (when (or (not (url-type parsed-url))
+                                 (string-equal (url-type parsed-url) "localhost")) ; for ease of local debugging
+                         (setq parsed-url (url-generic-parse-url (concat "eins://" url))))
+                       (when (not (url-portspec parsed-url))
+                         (pcase (url-type parsed-url)
+                           ("eins" (setf (url-portspec parsed-url) 6540))
+                           ("ein" (setf (url-portspec parsed-url) 6530))
+                           ("tuntox" (setf (url-portspec parsed-url) 6530))))
+                       parsed-url)))
       ("Display Name: " ,crdt-default-name ,(crdt--settings-make-ensure-nonempty crdt-default-name)))))
   (unless (url-p url)
     (when (eq (length url) 0)
@@ -2456,13 +2459,13 @@ Join with DISPLAY-NAME."
                                          (cons 'gnutls-x509pki
                                                (gnutls-boot-parameters
                                                 :type 'gnutls-x509pki
-                                                :hostname (url-host url)))))
-                         (when (= (url-portspec url) 6540)
-                           (process-put proc 'crdt--downgrade-continuation
-                                        (lambda ()
-                                          (process-put proc 'crdt--downgrade-continuation nil)
-                                          (downgrade))))
-                         proc))
+                                                :hostname (url-host url))))))
+                     (when (= (url-portspec url) 6540)
+                       (process-put proc 'crdt--downgrade-continuation
+                                    (lambda ()
+                                      (process-put proc 'crdt--downgrade-continuation nil)
+                                      (downgrade))))
+                     proc)
                  (file-error
                   (if (= (url-portspec url) 6540)
                       (downgrade)
