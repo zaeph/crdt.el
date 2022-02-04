@@ -754,6 +754,7 @@ FILTER can be nil, 'server or 'client."
     (define-key map (kbd "RET") #'crdt-list-buffers)
     (define-key map [mouse-1] #'crdt-list-buffers)
     (define-key map (kbd "k") #'crdt--stop-session)
+    (define-key map (kbd "d") #'crdt--stop-session)
     map))
 
 (define-derived-mode crdt-session-menu-mode tabulated-list-mode
@@ -839,6 +840,7 @@ Directly return the buffer network name under point if in the buffer menu."
     (define-key map (kbd "RET") #'crdt-switch-to-buffer-other-window)
     (define-key map [mouse-1] #'crdt-switch-to-buffer-other-window)
     (define-key map (kbd "k") #'crdt-stop-share-buffer)
+    (define-key map (kbd "d") #'crdt-stop-share-buffer)
     map))
 
 (define-derived-mode crdt-buffer-menu-mode tabulated-list-mode
@@ -953,6 +955,7 @@ Only server can perform this action."
     (define-key map (kbd "RET") #'crdt-goto-user)
     (define-key map [mouse-1] #'crdt-goto-user)
     (define-key map (kbd "k") #'crdt-kill-user)
+    (define-key map (kbd "d") #'crdt-kill-user)
     (define-key map (kbd "f") #'crdt-follow-user)
     map))
 
