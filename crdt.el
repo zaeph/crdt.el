@@ -64,6 +64,10 @@
 (defvar crdt--log-network-traffic nil
   "Debug switch to log network traffic to *Messages*.")
 
+(defvar crdt--inhibit-recover nil
+  "Debug switch to disable error recovery mechanism.
+This includes `crdt--with-recover' and `crdt--with-should-not-error'.")
+
 (defcustom crdt-tuntox-executable "tuntox"
   "Path to the tuntox binary."
   :type 'file)
@@ -90,9 +94,13 @@
   "Path to TLS private key file used for TLS-secured server."
   :type 'file)
 
-(defcustom crdt-use-stunnel t
+(defcustom crdt-use-stunnel nil
   "Start stunnel proxy for CRDT servers."
   :type '(choice boolean (const confirm)))
+
+(defcustom crdt-default-tls nil
+  "Connecting with TLS (eins) protocol by default."
+  :type 'boolean)
 
 (defcustom crdt-read-settings-help-string
   (concat "\\[forms-next-field]:Next Field, \\[forms-prev-field]:Prev Field\n"
@@ -582,24 +590,28 @@ If SESSION is nil, use current CRDT--SESSION."
   "When any error in BODY occur, signal a CRDT-SYNC-ERROR instead.
 This will hopefully trigger error recovery mechanism when further unwinding the stack."
   (declare (indent 1) (debug (sexp def-body)))
-  `(condition-case nil
-       (progn ,@ body)
-     (error (signal 'crdt-sync-error nil))))
+  `(if crdt--inhibit-recover
+       (progn ,@body)
+     (condition-case nil
+         (progn ,@ body)
+       (error (signal 'crdt-sync-error nil)))))
 
 (defmacro crdt--with-should-not-error (name &rest body)
   "When any error in BODY occur, print a report and stop CRDT in this buffer.
 NAME is included in the report."
   (declare (indent 1) (debug (sexp def-body)))
-  `(condition-case err
-       (progn ,@ body)
-     (error
-      (warn "CRDT mode exited in buffer %s because of error %s inside %s."
-            (current-buffer) err ',name)
-      (if (crdt--server-p)
-          (crdt-stop-share-buffer)
-        (remhash crdt--buffer-network-name (crdt--session-buffer-table crdt--session))
-        (crdt--refresh-buffers-maybe)
-        (crdt-mode -1)))))
+  `(if crdt--inhibit-recover
+       (progn ,@body)
+     (condition-case err
+         (progn ,@ body)
+       (error
+        (warn "CRDT mode exited in buffer %s because of error %s inside %s."
+              (current-buffer) err ',name)
+        (if (crdt--server-p)
+            (crdt-stop-share-buffer)
+          (remhash crdt--buffer-network-name (crdt--session-buffer-table crdt--session))
+          (crdt--refresh-buffers-maybe)
+          (crdt-mode -1))))))
 
 (defun crdt--recover (&optional err)
   "Try to recover from a synchronization failure.
@@ -2406,7 +2418,12 @@ Join with DISPLAY-NAME."
                        (setq parsed-url (url-generic-parse-url url))
                        (when (or (not (url-type parsed-url))
                                  (string-equal (url-type parsed-url) "localhost")) ; for ease of local debugging
-                         (setq parsed-url (url-generic-parse-url (concat "eins://" url))))
+                         (let ((inferred-protocol
+                                (cond ((eq (url-portspec parsed-url) 6530) "ein")
+                                      ((eq (url-portspec parsed-url) 6540) "eins")
+                                      (crdt-default-tls "eins")
+                                      (t "ein"))))
+                           (setq parsed-url (url-generic-parse-url (concat inferred-protocol "://" url)))))
                        (when (not (url-portspec parsed-url))
                          (pcase (url-type parsed-url)
                            ("eins" (setf (url-portspec parsed-url) 6540))
