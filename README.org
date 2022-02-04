@@ -60,19 +60,20 @@ press ~RET~ in the session list to see buffers in the selected session.
 =M-x crdt-stop-session= stops a session you've started and disconnect all other users from it.
 This will ask for your confirmation, customize =crdt-confirm-stop-session= if you want to disable it.
 
-You can also press ~k~ in the session list (show it by =M-x crdt-list-sessions=).
+You can also press ~k~ or ~d~ in the session list (show it by =M-x crdt-list-sessions=).
 
-=M-x crdt-stop-share-buffer= removes current buffer from its CRDT session 
-(this operation is only allowed at server side). Or press ~k~ in the buffer list.
+=M-x crdt-stop-share-buffer= removes current buffer from its CRDT
+session (this operation is only allowed at server side). You can also
+press ~k~ or ~d~ in the buffer list.
 
 ** Disconnect from a session
 
 =M-x crdt-disconnect=, then choose a session to disconnect from.
 
-You can also press ~k~ in the session list (show it by =M-x crdt-list-sessions=).
+You can also press ~k~ or ~d~ in the session list (show it by =M-x crdt-list-sessions=).
 
 The server Emacs has the privilege to disconnect a user from a session.
-To do so, press ~k~ on an entry in the user list (show it by =M-x crdt-list-users=).
+To do so, press ~k~ or ~d~ on an entry in the user list (show it by =M-x crdt-list-users=).
 
 ** Visualizing author of parts of the document
 Turn on =crdt-visualize-author-mode=. Colored underlines are added to each part of the document,
