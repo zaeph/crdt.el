@@ -370,6 +370,7 @@ Must be used inside CRDT--WITH-INSERTION-INFORMATION."
   next-user-id
   (buffer-table (make-hash-table :test 'equal)) ; maps buffer network name to buffer
   follow-user-id
+  my-location-marker ; used to store my location temporarily when crdt-goto-{next,prev}-user
   permissions
   (local-fcap-table (make-hash-table))
   (remote-fcap-table (make-hash-table)))
@@ -916,25 +917,77 @@ Directly return the user name under point if in the user menu."
       (crdt--read-user session)
       (signal 'quit nil)))
 
-(defun crdt-goto-user (session user-id)
-  "Goto the cursor location of user with USER-ID in SESSION."
+(defun crdt-goto-user (session user-id &optional noswitch)
+  "Goto the cursor location of user with USER-ID in SESSION.
+If NOSWITCH is non-nil, don't switch window."
   (interactive (let ((session (crdt--read-session-maybe)))
                  (list session (crdt--read-user-maybe session))))
   (let ((crdt--session session))
     (if (eq user-id (crdt--session-local-id crdt--session))
-        (funcall (if (eq major-mode 'crdt-user-menu-mode)
-                     #'switch-to-buffer-other-window
-                   #'switch-to-buffer)
-         (gethash (crdt--session-focused-buffer-name crdt--session) (crdt--session-buffer-table crdt--session)))
+        (unless noswitch
+          (funcall (if (eq major-mode 'crdt-user-menu-mode)
+                       #'switch-to-buffer-other-window
+                     #'switch-to-buffer)
+                   (gethash (crdt--session-focused-buffer-name crdt--session) (crdt--session-buffer-table crdt--session))))
       (unless
           (cl-block nil
             (let* ((metadata (or (gethash user-id (crdt--session-contact-table crdt--session)) (cl-return)))
                    (buffer-name (or (crdt--contact-metadata-focus metadata) (cl-return))))
               (crdt--with-buffer-name-pull (buffer-name)
-	        (switch-to-buffer-other-window (current-buffer))
+	        (unless noswitch
+                  (switch-to-buffer-other-window (current-buffer)))
 	        (ignore-errors (goto-char (overlay-start (car (gethash user-id crdt--pseudo-cursor-table)))))
 	        t)))
         (message "Doesn't have position information for this user yet.")))))
+
+(defun crdt--session-ensure-user-menu-buffer (session)
+  (unless (and (crdt--session-user-menu-buffer session)
+               (buffer-live-p (crdt--session-user-menu-buffer session)))
+    (setf (crdt--session-user-menu-buffer session)
+          (generate-new-buffer (format "*CRDT Users %s*" (crdt--session-urlstr session))))
+    (crdt--assimilate-session (crdt--session-user-menu-buffer session))))
+
+(defun crdt--cycle-user (&optional prev)
+  "Move point in user menu buffer and goto its cursor position.
+If user menu buffer does not exist yet, create it.
+If PREV is non-nil, move backward, otherwise move forward.
+When moving into/out of ourselves, push/pop a global marker instead."
+  (unless crdt--session
+    (error "Not a CRDT shared buffer"))
+  (crdt--session-ensure-user-menu-buffer crdt--session)
+  (let ((mark (point-marker)))
+    (with-current-buffer (crdt--session-user-menu-buffer crdt--session)
+      (when (= (point) (point-max))
+        (forward-line -1))
+      (when (eq (tabulated-list-get-id) (crdt--session-local-id crdt--session))
+        (setf (crdt--session-my-location-marker crdt--session) mark)
+        (add-to-history 'global-mark-ring mark global-mark-ring-max t))
+      (if prev
+          (unless (= (forward-line -1) 0)
+            (goto-char (point-max))
+            (forward-line -1))
+        (forward-line)
+        (when (= (point) (point-max))
+          (goto-char (point-min))))
+      (let ((window (get-buffer-window (current-buffer) t)))
+        (when window (set-window-point window (point))))
+      (if (eq (tabulated-list-get-id) (crdt--session-local-id crdt--session))
+          (if (eq (car global-mark-ring) (crdt--session-my-location-marker crdt--session))
+              (pop-global-mark)
+            (goto-char (crdt--session-my-location-marker crdt--session)))
+        (crdt-goto-user crdt--session (tabulated-list-get-id) t)))))
+
+(defun crdt-goto-next-user ()
+  "Move point in user menu buffer to next user and goto its cursor position.
+If user menu buffer does not exist yet, create it."
+  (interactive)
+  (crdt--cycle-user))
+
+(defun crdt-goto-prev-user ()
+  "Move point in user menu buffer to previous user and goto its cursor position.
+If user menu buffer does not exist yet, create it."
+  (interactive)
+  (crdt--cycle-user t))
 
 (defun crdt-kill-user (session user-id)
   "Disconnect the user with USER-ID in SESSION.
@@ -974,10 +1027,7 @@ Only server can perform this action."
     (with-current-buffer (current-buffer)
       (unless crdt--session
         (error "Not a CRDT shared buffer"))
-      (unless (and (crdt--session-user-menu-buffer crdt--session) (buffer-live-p (crdt--session-user-menu-buffer crdt--session)))
-        (setf (crdt--session-user-menu-buffer crdt--session)
-              (generate-new-buffer (format "*CRDT Users %s*" (crdt--session-urlstr crdt--session))))
-        (crdt--assimilate-session (crdt--session-user-menu-buffer crdt--session)))
+      (crdt--session-ensure-user-menu-buffer crdt--session)
       (let ((display-buffer (crdt--session-user-menu-buffer crdt--session)))
         (crdt-refresh-users display-buffer)
         (switch-to-buffer-other-window display-buffer)))))
